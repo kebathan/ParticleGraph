@@ -3,6 +3,10 @@ from scipy.spatial import Voronoi, voronoi_plot_2d
 import torch
 from ParticleGraph.utils import to_numpy
 import math
+import matplotlib.pyplot as plt
+from matplotlib.patches import Polygon
+from matplotlib.collections import PatchCollection
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
 def init_cell_range(config, device, scenario="None"):
     simulation_config = config.simulation
@@ -34,15 +38,15 @@ def init_cell_range(config, device, scenario="None"):
     else:
         mc_slope = torch.clamp(torch.randn(n_particle_types, 1, device=device) * 30, min=-30, max=30).flatten()
 
-    if config.simulation.area != [-1]:
-        area = torch.tensor(config.simulation.area, device=device)
+    if config.simulation.cell_area != [-1]:
+        cell_area = torch.tensor(config.simulation.cell_area, device=device)
     else:
-        area = torch.clamp(torch.abs(torch.ones(n_particle_types, 1, device=device) * 0.0015 + torch.randn(n_particle_types, 1, device=device) * 0.0010), min=0.0005, max=0.0025).squeeze()
+        cell_area = torch.clamp(torch.abs(torch.ones(n_particle_types, 1, device=device) * 0.0015 + torch.randn(n_particle_types, 1, device=device) * 0.0010), min=0.0005, max=0.0025).squeeze()
 
-    return cycle_length, final_cell_mass, cell_death_rate, mc_slope, area
+    return cycle_length, final_cell_mass, cell_death_rate, mc_slope, cell_area
 
 
-def init_cells(config, cycle_length, final_cell_mass, cell_death_rate, mc_slope, area, device):
+def init_cells(config, cycle_length, final_cell_mass, cell_death_rate, mc_slope, cell_area, device):
     simulation_config = config.simulation
     n_particles = simulation_config.n_particles
     n_particle_types = simulation_config.n_particle_types
@@ -93,13 +97,13 @@ def init_cells(config, cycle_length, final_cell_mass, cell_death_rate, mc_slope,
                 torch.ones(n_particles, device=device) + 0.05 * torch.randn(n_particles, device=device))) / 100
     cell_death_rate_distrib = cell_death_rate_distrib[:, None]
 
-    area_distrib = area[to_numpy(type)].squeeze()[:, None]
+    cell_area_distrib = cell_area[to_numpy(type)].squeeze()[:, None]
 
     particle_id = torch.arange(n_particles, device=device)
     particle_id = particle_id[:, None]
     type = type[:, None]
 
-    return particle_id, pos, dpos, type, status, cell_age, cell_stage, cell_mass_distrib, growth_rate_distrib, cycle_length_distrib, cell_death_rate_distrib, mc_slope_distrib, area_distrib
+    return particle_id, pos, dpos, type, status, cell_age, cell_stage, cell_mass_distrib, growth_rate_distrib, cycle_length_distrib, cell_death_rate_distrib, mc_slope_distrib, cell_area_distrib
 
 
 def update_cell_cycle_stage(cell_age, cycle_length, type_list, device):
@@ -134,19 +138,25 @@ def update_cell_cycle_stage(cell_age, cycle_length, type_list, device):
 def get_vertices(points=[], device=[]):
 
     extra_points = points
-    v_list = [[-1, -1], [-1, 0], [-1, 1], [0, 1], [1, 1], [1, 0], [1, -1], [0, -1]]
+    if points.shape[1] == 3:   # has 3D
+        v_list = [[-1, -1, 1], [-1, 0, 1], [-1, 1, 1], [0, 1, 1], [1, 1, 1], [1, 0, 1], [1, -1, 1], [0, -1, 1], [0, 0, 1],
+                  [-1, -1, 0], [-1, 0, 0], [-1, 1, 0], [0, 1, 0], [1, 1, 0], [1, 0, 0], [1, -1, 0], [0, -1, 0],
+                  [-1, -1, -1], [-1, 0, -1], [-1, 1, -1], [0, 1, -1], [1, 1, -1], [1, 0, -1], [1, -1, -1], [0, -1, -1], [0, 0, -1]]
+    else:
+        v_list = [[-1, -1], [-1, 0], [-1, 1], [0, 1], [1, 1], [1, 0], [1, -1], [0, -1]]
     for n in range(len(v_list)):
         extra_points = np.concatenate((extra_points, points + v_list[n]), axis=0)
-    vor = Voronoi(extra_points)
 
+    vor = Voronoi(extra_points)
     # vertices_index collect all vertices index of regions of interest
     vertices_per_cell = []
     for n in range(len(points)):
         if n == 0:
-            vertices_index = vor.regions[vor.point_region[0]]
+            vertices_index = vor.regions[vor.point_region[0].copy()]
         else:
             vertices_index = np.concatenate((vertices_index, vor.regions[vor.point_region[n]]), axis=0)
-        vertices_per_cell.append(vor.regions[vor.point_region[n]])
+        vertices_per_cell.append((vor.regions[vor.point_region[n]].copy()))
+
     vertices = []
     map = {}
     count = 0

@@ -12,6 +12,7 @@ from scipy.spatial import Voronoi, voronoi_plot_2d
 from matplotlib.patches import Polygon
 from matplotlib.collections import PatchCollection
 import tifffile
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
 def data_generate(config, visualize=True, run_vizualized=0, style='color', erase=False, step=5, alpha=0.2, ratio=1,
                   scenario='none', device=None, bSave=True):
@@ -32,7 +33,12 @@ def data_generate(config, visualize=True, run_vizualized=0, style='color', erase
                                         alpha=0.2, ratio=ratio,
                                         scenario=scenario, device=device, bSave=bSave)
     elif has_cell_divsion:
-         data_generate_cell(config, visualize=visualize, run_vizualized=run_vizualized, style=style, erase=erase, step=step,
+        if config.simulation.dimension == 3:
+            data_generate_cell_3D(config, visualize=visualize, run_vizualized=run_vizualized, style=style, erase=erase, step=step,
+                                        alpha=0.2, ratio=ratio,
+                                        scenario=scenario, device=device, bSave=bSave)
+        else:
+            data_generate_cell(config, visualize=visualize, run_vizualized=run_vizualized, style=style, erase=erase, step=step,
                                         alpha=0.2, ratio=ratio,
                                         scenario=scenario, device=device, bSave=bSave)
     else:
@@ -464,9 +470,9 @@ def data_generate_cell(config, visualize=True, run_vizualized=0, style='color', 
         '''
 
         if run == 0:
-            cycle_length, final_cell_mass, cell_death_rate, mc_slope, area = init_cell_range(config, device=device)
+            cycle_length, final_cell_mass, cell_death_rate, mc_slope, cell_area = init_cell_range(config, device=device)
         
-        N1, X1, V1, T1, H1, A1, S1, M1, R1, CL1, DR1, MC1, AR1 = init_cells(config, cycle_length, final_cell_mass, cell_death_rate, mc_slope, area, device=device)
+        N1, X1, V1, T1, H1, A1, S1, M1, R1, CL1, DR1, MC1, AR1 = init_cells(config, cycle_length, final_cell_mass, cell_death_rate, mc_slope, cell_area, device=device)
 
         T1_list = T1.clone().detach()
 
@@ -495,20 +501,20 @@ def data_generate_cell(config, visualize=True, run_vizualized=0, style='color', 
 
             # calculate average area per cell type
 
-            avg_areas = []
+            target_cell_areas = []
             num_cells = []
 
             for i in range(n_particle_types):
                 pos = to_numpy(torch.argwhere(T1.squeeze() == i)).squeeze()
                 num_cells.append(len(pos))
-                avg_areas.append(torch.mean(areas[pos]))
+                target_cell_areas.append(torch.mean(areas[pos]))
 
-            avg_areas = torch.tensor(avg_areas, device=device)
+            target_cell_areas = torch.tensor(target_cell_areas, device=device)
 
             # add 50% noise to the average area
 
-            avg_areas += torch.ones((n_particle_types), device=device) * torch.randn((n_particle_types), device=device) * 0.00025
-            avg_areas[-1] = 0.0020
+            target_cell_areas += torch.ones((n_particle_types), device=device) * torch.randn((n_particle_types), device=device) * 0.00025
+            target_cell_areas[-1] = 0.0020
 
             # normalize new average areas so that the sum of the areas is = to 1
                     # how many cells per type (N_i)
@@ -518,9 +524,9 @@ def data_generate_cell(config, visualize=True, run_vizualized=0, style='color', 
 
             coeff = 0
             for i in range(n_particle_types):
-                coeff += num_cells[i] * avg_areas[i]
+                coeff += num_cells[i] * target_cell_areas[i]
 
-            avg_areas /= coeff
+            target_cell_areas /= coeff
 
         index_particles = []
         for n in range(n_particle_types):
@@ -578,7 +584,7 @@ def data_generate_cell(config, visualize=True, run_vizualized=0, style='color', 
                     CL1 = torch.cat((CL1, cycle_length[to_numpy(T1[pos, 0]),None] * var[:,None], cycle_length[to_numpy(T1[pos, 0]),None] * var[:,None]), dim=0)
                     DR1 = torch.cat((DR1, cell_death_rate[to_numpy(T1[pos, 0]),None] * nd[:,None], cell_death_rate[to_numpy(T1[pos, 0]),None] * nd[:,None]), dim=0)
                     MC1 = torch.cat((MC1, mc_slope[to_numpy(T1[pos, 0]),None], mc_slope[to_numpy(T1[pos, 0]),None]), dim=0)
-                    AR1 = torch.cat((AR1, area[to_numpy(T1[pos, 0]),None], area[to_numpy(T1[pos, 0]),None]), dim=0)
+                    AR1 = torch.cat((AR1,  AR1[pos, :], AR1[pos, :]), dim=0)
                     R1 = M1/(2 * CL1)
 
                     alive = torch.argwhere(H1[:, 0] == 1).squeeze()
@@ -658,26 +664,22 @@ def data_generate_cell(config, visualize=True, run_vizualized=0, style='color', 
                     optimizer.zero_grad()
                     centroids, voronoi_area = get_voronoi_areas(vertices_pos, vertices_per_cell, device)
 
-                    # loss = (voronoi_area - avg_areas).norm(2)   
+                    # type_means = np.ones((len(voronoi_area)))
+                    # for i in range(n_particle_types):
+                    #         pos = to_numpy(torch.argwhere(T1.squeeze() == i)).squeeze()
+                    #         type_means[pos] = to_numpy(target_cell_areas[i])
+                    # type_means = torch.tensor(type_means, device=device)
+                    # loss = (voronoi_area - type_means).norm(2)
 
-                    type_means = np.ones((len(voronoi_area)))
-                    for i in range(n_particle_types):
-                            pos = to_numpy(torch.argwhere(T1.squeeze() == i)).squeeze()
-                            #temp = to_numpy(torch.mean(voronoi_area[pos]) + torch.randn((len(voronoi_area)), device=device) * 0.0005
+                    # target_areas = torch.zeros_like(AR1)
+                    # for i in range(n_particle_types):
+                    #     pos = torch.argwhere(T1.squeeze() == i).squeeze()
+                    #     target_areas[pos] = target_cell_areas[i]
 
-                            type_means[pos] = to_numpy(avg_areas[i])
-                            # type_means[pos] = to_numpy(torch.mean(voronoi_area[pos]) + torch.ones((len(pos)), device=device) * area_var[i])
-                            # type_means[pos] = to_numpy(torch.mean(voronoi_area[pos]))
-                    
-                    type_means = torch.tensor(type_means, device=device)
-                    loss = (voronoi_area - type_means).norm(2)
+                    target_areas = target_cell_areas[to_numpy(T1).astype(int)].squeeze().clone().detach()
 
-                    # if it < 50:
-                    #     loss = torch.var(voronoi_area)
-                    # else:
-                    #     loss = (voronoi_area - AR1.flatten()).norm(2)   
-                     
-         
+                    loss = (voronoi_area - target_areas).norm(2)
+
                     loss.backward()
                     optimizer.step()
                     # fig, ax = fig_init()
@@ -704,8 +706,6 @@ def data_generate_cell(config, visualize=True, run_vizualized=0, style='color', 
                 optimized_vertices = vertices_pos
                 delta_centroids = centroids - first_centroids
 
-                # y += delta_centroids * simulation_config.cell_inert_model_coeff / 5
-
             if (it) % 25 == 0:
                 t, r, a = get_gpu_memory_map(device)
                 logger.info(f"GPU memory: total {t} reserved {r} allocated {a}")
@@ -722,7 +722,7 @@ def data_generate_cell(config, visualize=True, run_vizualized=0, style='color', 
 
             # cell update
             if model_config.prediction == '2nd_derivative':
-                V1 += y * delta_t
+                V1 += y * delta_t * simulation_config.cell_active_model_coeff
             else:
                 V1 = y
 
@@ -934,6 +934,339 @@ def data_generate_cell(config, visualize=True, run_vizualized=0, style='color', 
                 man_track = np.int16(man_track)
                 np.savetxt(f'graphs_data/graphs_{dataset_name}/man_track.txt', man_track, fmt="%d", delimiter=" ", newline="\n")
 
+
+    for handler in logger.handlers[:]:
+        handler.close()
+        logger.removeHandler(handler)
+
+
+def data_generate_cell_3D(config, visualize=True, run_vizualized=0, style='color', erase=False, step=5, alpha=0.2,
+                       ratio=1, scenario='none', device=None, bSave=True):
+    torch.random.fork_rng(devices=device)
+    torch.random.manual_seed(42)
+
+    simulation_config = config.simulation
+    training_config = config.training
+    model_config = config.graph_model
+
+    print(f'Generating data ... {model_config.particle_model_name} {model_config.mesh_model_name}')
+
+    dimension = simulation_config.dimension
+    max_radius = simulation_config.max_radius
+    min_radius = simulation_config.min_radius
+    n_particle_types = simulation_config.n_particle_types
+    n_particles_max = simulation_config.n_particles_max
+    delta_t = simulation_config.delta_t
+    n_frames = simulation_config.n_frames
+    cmap = CustomColorMap(config=config)
+    dataset_name = config.dataset
+    marker_size = config.plotting.marker_size
+
+    max_radius_list = []
+    edges_len_list = []
+    folder = f'./graphs_data/graphs_{dataset_name}/'
+    os.makedirs(folder, exist_ok=True)
+    os.makedirs(f'./graphs_data/graphs_{dataset_name}/generated_data/Fig/', exist_ok=True)
+    os.makedirs(f'./graphs_data/graphs_{dataset_name}/generated_data/GT/', exist_ok=True)
+    if erase:
+        files = glob.glob(f"{folder}/*")
+        for f in files:
+            if (f[-14:] != 'generated_data') & (f != 'p.pt') & (f != 'cycle_length.pt') & (f != 'model_config.json') & (
+                    f != 'generation_code.py'):
+                os.remove(f)
+        files = glob.glob(f'./graphs_data/graphs_{dataset_name}/generated_data/Fig/*')
+        for f in files:
+            os.remove(f)
+        files = glob.glob(f'./graphs_data/graphs_{dataset_name}/generated_data/GT/*')
+        for f in files:
+            os.remove(f)
+
+    logging.basicConfig(filename=f'./graphs_data/graphs_{dataset_name}/generator.log', format='%(asctime)s %(message)s',
+                        filemode='w')
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
+    logger.info(config)
+
+    for run in range(config.training.n_runs):
+
+        torch.cuda.empty_cache()
+
+        model, bc_pos, bc_dpos = choose_model(config, device=device)
+
+        n_particles = simulation_config.n_particles
+
+        x_list = []
+        y_list = []
+        x_len_list = []
+        edge_p_p_list = []
+        vertices_pos_list = []
+        vertices_per_cell_list = []
+
+        '''
+        INITIALIZE PER CELL TYPE VALUES1000
+        cycle_length
+        final_cell_mass
+        cell_death_rate
+        mc_slope: scalar used in the function set_mass_coeff
+
+        INITIALIZE PER CELL VALUES
+        Cell ID
+        X1 positions dim=2
+        V1 velocities dim=2
+        T1 cell type dim=1
+        H1 cell status dim=2  H1[:,0] = cell alive flag, alive : 0 , death : 0 , H1[:,1] = cell division flag, dividing : 1
+        A1 cell age dim=1
+        N1 cell index dim=1
+        S1 cell stage dim=1  0 = G1 , 1 = S, 2 = G2, 3 = M
+        M1 cell_mass_distrib mass dim=1 (per node)
+        R1 cell growth rate dim=1
+        DR1 cell death rate dim=1
+        MC1 mass coefficient of the cell (relation between velocity and mass)
+        AR1 area of the cell
+        '''
+
+        if run == 0:
+            cycle_length, final_cell_mass, cell_death_rate, mc_slope, cell_area = init_cell_range(config, device=device)
+
+        N1, X1, V1, T1, H1, A1, S1, M1, R1, CL1, DR1, MC1, AR1 = init_cells(config, cycle_length, final_cell_mass,
+                                                                            cell_death_rate, mc_slope, cell_area,
+                                                                            device=device)
+
+        T1_list = T1.clone().detach()
+        n_particles_alive = len(T1)
+
+        man_track = torch.cat((N1 + 1, torch.zeros((len(N1), 3), device=device)), 1)
+        man_track[:, 2] = -1
+
+        logger.info('cell cycle length')
+        logger.info(to_numpy(cycle_length))
+        logger.info('cell death rate')
+        logger.info(to_numpy(cell_death_rate))
+        logger.info("cell final mass")
+        logger.info(to_numpy(final_cell_mass))
+        logger.info('mass coefficient ranges')
+        logger.info(mc_slope)
+        logger.info('interaction parameters')
+        logger.info(to_numpy(model.p))
+
+        time.sleep(0.5)
+        for it in range(simulation_config.start_frame, n_frames + 1):
+
+            # calculate cell death and cell division
+            if (it > 0) & (n_particles_alive < simulation_config.n_particles_max):
+                # cell death
+                sample = torch.rand(len(X1), device=device)
+                H1[sample.squeeze() < DR1.squeeze() / 5E4, 0] = 0  # H1[:,0] = cell alive flag, alive : 1 , death : 0
+                n_particles_alive = torch.sum(H1[:, 0])
+                n_particles_dead = n_particles - n_particles_alive
+                # cell division
+                pos = torch.argwhere(
+                    (A1.squeeze() >= CL1.squeeze()) & (H1[:, 0].squeeze() == 1) & (S1[:, 0].squeeze() == 3) & (
+                                n_particles_alive < n_particles_max)).flatten()
+                if (len(pos) > 0):
+                    n_add_nodes = len(pos) * 2
+                    pos = to_numpy(pos).astype(int)
+
+                    N1_ = n_particles + torch.arange(n_add_nodes, device=device)
+                    N1 = torch.cat((N1, N1_[:, None]), dim=0)
+
+                    man_track_ = torch.cat((N1_[:, None] + 1, torch.zeros((n_add_nodes, 3), device=device)),
+                                           1)  # cell ID
+                    man_track_[:, 1] = it  # start time
+                    man_track_[:, 2] = -1  # end time
+                    man_track_[0:n_add_nodes // 2, 3:4] = N1[pos] + 1  # parent cell
+                    man_track_[n_add_nodes // 2:n_add_nodes, 3:4] = N1[pos] + 1  # parent cell
+                    man_track = torch.cat((man_track, man_track_), 0)
+                    man_track[to_numpy(N1[pos]).astype(int), 2] = it - 1  # end time
+
+                    n_particles = n_particles + n_add_nodes
+
+                    X1 = torch.cat((X1, X1[pos, :] + 4 * V1[pos, :], X1[pos, :] - 4 * V1[pos, :]), dim=0)
+
+                    nd = torch.ones(len(pos), device=device) + 0.05 * torch.randn(len(pos), device=device)
+                    var = torch.ones(len(pos), device=device) + 0.20 * torch.randn(len(pos), device=device)
+
+                    V1 = torch.cat((V1, V1[pos, :], -V1[pos, :]), dim=0)  # the new cell is moving away from its mother
+                    T1 = torch.cat((T1, T1[pos, :], T1[pos, :]), dim=0)
+
+                    T1_list = torch.cat((T1_list, T1[pos, :], T1[pos, :]), dim=0)
+
+                    H1[pos, 0] = 0  # mother cell is removed, considered dead
+                    H1[pos, 1] = 1  # cell division flag
+                    H1 = torch.concatenate((H1, torch.ones((n_add_nodes, 2), device=device)), 0)
+                    A1 = torch.cat((A1, torch.ones((n_add_nodes, 1), device=device)), 0)
+                    S1 = torch.cat((S1, torch.ones((n_add_nodes, 1), device=device)), 0)
+                    M1 = torch.cat((M1, final_cell_mass[to_numpy(T1[pos, 0]), None] / 2,
+                                    final_cell_mass[to_numpy(T1[pos, 0]), None] / 2), dim=0)
+                    CL1 = torch.cat((CL1, cycle_length[to_numpy(T1[pos, 0]), None] * var[:, None],
+                                     cycle_length[to_numpy(T1[pos, 0]), None] * var[:, None]), dim=0)
+                    DR1 = torch.cat((DR1, cell_death_rate[to_numpy(T1[pos, 0]), None] * nd[:, None],
+                                     cell_death_rate[to_numpy(T1[pos, 0]), None] * nd[:, None]), dim=0)
+                    MC1 = torch.cat((MC1, mc_slope[to_numpy(T1[pos, 0]), None], mc_slope[to_numpy(T1[pos, 0]), None]),
+                                    dim=0)
+                    AR1 = torch.cat((AR1, AR1[pos, :], AR1[pos, :]), dim=0)
+                    R1 = M1 / (2 * CL1)
+
+                    alive = torch.argwhere(H1[:, 0] == 1).squeeze()
+
+                    N1 = N1[alive]
+                    X1 = X1[alive]
+                    V1 = V1[alive]
+                    T1 = T1[alive]
+                    H1 = H1[alive]
+                    A1 = A1[alive]
+                    S1 = S1[alive]
+                    M1 = M1[alive]
+                    CL1 = CL1[alive]
+                    R1 = R1[alive]
+                    DR1 = DR1[alive]
+                    MC1 = MC1[alive]
+                    AR1 = AR1[alive]
+
+                    index_particles = []
+                    for n in range(n_particle_types):
+                        pos = torch.argwhere(T1 == n)
+                        pos = to_numpy(pos[:, 0].squeeze()).astype(int)
+                        index_particles.append(pos)
+
+            # calculate cell type change
+            if simulation_config.state_type == 'sequence':
+                sample = torch.rand((len(T1), 1), device=device)
+                sample = (sample < (1 / config.simulation.state_params[0])) * torch.randint(0, n_particle_types,(len(T1), 1), device=device)
+                T1 = (T1 + sample) % n_particle_types
+
+            A1 = A1 + delta_t  # update age
+
+            if n_particles_alive < n_particles_max:
+                S1 = update_cell_cycle_stage(A1, cycle_length, T1, device)
+                M1 += R1 * delta_t
+
+            x = torch.concatenate((N1.clone().detach(), X1.clone().detach(), V1.clone().detach(), T1.clone().detach(),
+                                   H1.clone().detach(), A1.clone().detach(), S1.clone().detach(), M1.clone().detach(),
+                                   R1.clone().detach(), DR1.clone().detach(), MC1.clone().detach(),
+                                   AR1.clone().detach()), 1)
+
+            # calculate connectivity
+            with torch.no_grad():
+                edge_index = torch.sum(bc_dpos(x[:, None, 1:dimension + 1] - x[None, :, 1:dimension + 1]) ** 2, dim=2)
+                edge_index = ((edge_index < max_radius ** 2) & (edge_index > min_radius ** 2)).float() * 1
+                edge_index = edge_index.nonzero().t().contiguous()
+                edge_p_p_list.append(to_numpy(edge_index))
+                alive = (H1[:, 0] == 1).float() * 1.
+                dataset = data.Data(x=x, pos=x[:, 1:3], edge_index=edge_index)
+                if edge_index.shape[1] > simulation_config.max_edges:
+                    max_radius = max_radius / 1.025
+                else:
+                    max_radius = max_radius * 1.0025
+                max_radius = np.clip(max_radius, simulation_config.min_radius, simulation_config.max_radius)
+                max_radius_list.append(max_radius)
+                edges_len_list.append(edge_index.shape[1])
+                x_len_list.append(x.shape[0])
+
+            # calculate passive model
+
+            # voronoi_perimeter = get_voronoi_perimeters(vertices_pos, vertices_per_cell, device)
+            # voronoi_lengths = get_voronoi_lengths(vertices_pos, vertices_per_cell, device)
+            # U = cell_energy(voronoi_area, voronoi_perimeter, voronoi_lengths, device)
+
+            # model prediction
+            with torch.no_grad():
+                y = model(dataset, has_field=True)
+                y = y * alive[:, None].repeat(1, dimension)
+
+            if simulation_config.cell_inert_model_coeff > 0:
+
+                vor, vertices_pos, vertices_per_cell = get_vertices(points=to_numpy(X1), device=device)
+                vertices_pos_list.append(vertices_pos)
+                vertices_per_cell_list.append(vertices_per_cell)
+                vertices_pos.requires_grad = True
+                optimizer = torch.optim.Adam([vertices_pos], lr=1E-3)
+                first_centroids, voronoi_area = get_voronoi_areas(vertices_pos, vertices_per_cell, device)
+
+                # for i in range(2):
+                #     optimizer.zero_grad()
+                #     centroids, voronoi_area = get_voronoi_areas(vertices_pos, vertices_per_cell, device)
+                #     target_areas = target_cell_areas[to_numpy(T1).astype(int)].squeeze().clone().detach()
+                #     loss = (voronoi_area - target_areas).norm(2)
+                #     loss.backward()
+                #     optimizer.step()
+                centroids = first_centroids
+
+                delta_centroids = centroids - first_centroids
+
+            if (it) % 25 == 0:
+                t, r, a = get_gpu_memory_map(device)
+                logger.info(f"GPU memory: total {t} reserved {r} allocated {a}")
+                logger.info(
+                    f'{x.shape[0]} particles,  {edge_index.shape[1]} edges, max_radius: {np.round(max_radius, 3)},')
+                logger.info(f'max_radius {max_radius} {edge_index.shape[1]}')
+
+            # append list
+            if (it >= 0):
+                x_list.append(x)
+                y_list.append(y)
+
+            # cell update
+            if model_config.prediction == '2nd_derivative':
+                V1 += y * delta_t * simulation_config.cell_active_model_coeff
+            else:
+                V1 = y
+
+            V1 = V1 * alive[:, None].repeat(1, dimension)
+            X1 = bc_pos(X1 + V1 * delta_t + delta_centroids * simulation_config.cell_inert_model_coeff)
+
+
+            # output plots
+            if visualize & (run == run_vizualized) & (it % step == 0) & (it >= 0):
+
+                n_particles = len(X1)
+                print(f'frame {it}, {n_particles} particles, {edge_index.shape[1]} edges')
+                vor, vertices_pos, vertices_per_cell = get_vertices(points=to_numpy(X1), device=device)
+
+                cells = [[] for i in range(n_particles)]
+                for (l, r), vertices in vor.ridge_dict.items():
+                    if l < n_particles:
+                        cells[l].append(vor.vertices[vertices])
+                    elif r < n_particles:
+                        cells[r].append(vor.vertices[vertices])
+
+                fig = plt.figure()
+                ax = fig.add_subplot(111, projection='3d')
+                for n, poly in enumerate(cells):
+                    polygon = Poly3DCollection(poly, alpha=0.5,
+                                               facecolors=cmap.color(to_numpy(T1[n]).astype(int)),
+                                               linewidths=0.1, edgecolors='black')
+                    ax.add_collection3d(polygon)
+                plt.tight_layout()
+
+                num = f"{it:06}"
+                plt.savefig(f"graphs_data/graphs_{dataset_name}/generated_data/Fig/Fig_{run}_{num}.tif", dpi=85.35)
+                plt.close()
+
+
+        if bSave:
+            torch.save(x_list, f'graphs_data/graphs_{dataset_name}/x_list_{run}.pt')
+            torch.save(y_list, f'graphs_data/graphs_{dataset_name}/y_list_{run}.pt')
+            torch.save(T1_list, f'graphs_data/graphs_{dataset_name}/T1_list_{run}.pt')
+            np.savez(f'graphs_data/graphs_{dataset_name}/edge_p_p_list_{run}', *edge_p_p_list)
+            if simulation_config.cell_inert_model_coeff > 0:
+                torch.save(vertices_pos_list, f'graphs_data/graphs_{dataset_name}/vertices_pos_list_{run}.pt')
+                # np.savez(f'graphs_data/graphs_{dataset_name}/vertices_per_cell_list_{run}.pt',*vertices_per_cell_list)
+
+            torch.save(cycle_length, f'graphs_data/graphs_{dataset_name}/cycle_length.pt')
+            torch.save(CL1, f'graphs_data/graphs_{dataset_name}/cycle_length_distrib.pt')
+            torch.save(cell_death_rate, f'graphs_data/graphs_{dataset_name}/cell_death_rate.pt')
+            torch.save(DR1, f'graphs_data/graphs_{dataset_name}/cell_death_rate_distrib.pt')
+            torch.save(model.p, f'graphs_data/graphs_{dataset_name}/model_p.pt')
+
+            if run == 0:
+                man_track = to_numpy(man_track)
+                pos = np.argwhere(man_track[:, 2] == -1)
+                if len(pos) > 0:
+                    man_track[pos, 2] = n_frames
+                man_track = np.int16(man_track)
+                np.savetxt(f'graphs_data/graphs_{dataset_name}/man_track.txt', man_track, fmt="%d", delimiter=" ",
+                           newline="\n")
 
     for handler in logger.handlers[:]:
         handler.close()

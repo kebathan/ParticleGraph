@@ -2394,8 +2394,8 @@ def data_train_signal(config, config_file, device):
             if adjacency[i,j]==0:
                 edge_index = torch.cat((edge_index, torch.tensor([[i], [j]], device=device)), 1)
                 edge_index = torch.cat((edge_index, torch.tensor([[j], [i]], device=device)), 1)
-    if (config_file == 'signal_N_100_2_d') | (config_file == 'signal_N_100_2_asym'):
-        print('Fully connection ...')
+    if (config_file == 'signal_N_100_2_d') | ('signal_N_100_2_asym' in config_file):
+        print('Fully connected...')
         for i in trange(n_particles):
                 i_s = torch.ones(n_particles, device=device) * i
                 j_s = torch.arange(n_particles, device=device)
@@ -2470,10 +2470,14 @@ def data_train_signal(config, config_file, device):
                     y = y / ynorm
                     y = y[:, 0:2]
 
-                    if epoch > -1:
-                        loss = (pred1 + pred2 - y).norm(2) / 2 + model.vals.norm(1) * config.training.coeff_L1
-                    else:
-                        loss = (pred1 + pred2 - y).norm(2) / 2
+
+                    func_f = model.lin_edge(torch.zeros(1,device=device))
+                    in_features = torch.cat((torch.zeros((n_particles,1),device=device),  model.a[1, :]), dim=1)
+                    func_phi = model.lin_phi(in_features.float())
+
+
+                    loss = (pred1 + pred2 - y).norm(2) / 2 + model.vals.norm(1) * config.training.coeff_L1 + func_f.norm(2) + func_phi.norm(2)
+
                         
                 case 3:
 
@@ -2575,12 +2579,30 @@ def data_train_signal(config, config_file, device):
         plt.xlabel('Embedding 0', fontsize=12)
         plt.ylabel('Embedding 1', fontsize=12)
 
+        A = torch.zeros(n_particles, n_particles, device=device, requires_grad=False, dtype=torch.float32)
+        if 'asymmetric' in config.simulation.adjacency_matrix:
+            A = model.vals
+        else:
+            i, j = torch.triu_indices(n_particles, n_particles, requires_grad=False, device=device)
+            A[i,j] = model.vals
+            A.T[i,j] = model.vals
+
         ax = fig.add_subplot(1, 6, 3)
         gt_weight = to_numpy(adjacency[adj_t])
-        pred_weight = to_numpy(model.weight_ij[adj_t])
+        pred_weight = to_numpy(A[adj_t])
         plt.scatter(gt_weight, pred_weight, s=0.1,c='k')
         plt.xlabel('gt weight', fontsize=12)
         plt.ylabel('predicted weight', fontsize=12)
+        ax = fig.add_subplot(1, 6, 4)
+        gt_weight = to_numpy(adjacency)
+        pred_weight = to_numpy(A)
+        plt.scatter(gt_weight, pred_weight, s=0.1,c='k')
+        plt.xlabel('all gt weight', fontsize=12)
+        plt.ylabel('all predicted weight', fontsize=12)
+        ax = fig.add_subplot(1, 6, 5)
+        plt.imshow(to_numpy(adjacency), cmap='viridis', vmin=0, vmax=0.01)
+        ax = fig.add_subplot(1, 6, 6)
+        plt.imshow(np.abs(to_numpy(A)), cmap='viridis', vmin=0, vmax=0.001)
 
         plt.tight_layout()
         plt.savefig(f"./{log_dir}/tmp_training/Fig_{dataset_name}_{epoch}.tif")

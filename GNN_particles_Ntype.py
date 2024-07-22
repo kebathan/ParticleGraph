@@ -33,7 +33,7 @@ from ParticleGraph.utils import *
 if __name__ == '__main__':
 
     #config_list = ['boids_16_division_model_2_Voronoi_a', 'boids_16_division_model_2_Voronoi_b', 'boids_16_division_model_2_Voronoi_c']
-    config_list = ["boids_16_division_model_2_Voronoi_nrmlzd2"]
+    config_list = ["boids_16_division_model_2_Voronoi_nrmlzd4"]
 
 
     for config_file in config_list:

@@ -24,13 +24,13 @@ from scipy.spatial import Voronoi, voronoi_plot_2d
 
 # matplotlib.use("Qt5Agg")
 
-class Interaction_Particles_extract(MessagePassing):
+class Interaction_Particle_extract(MessagePassing):
     """Interaction Network as proposed in this paper:
     https://proceedings.neurips.cc/paper/2016/hash/3147da8ab4a0437c15ef51a5cc7f2dc4-Abstract.html"""
 
     def __init__(self, config, device, aggr_type=None, bc_dpos=None):
 
-        super(Interaction_Particles_extract, self).__init__(aggr=aggr_type)  # "Add" aggregation.
+        super(Interaction_Particle_extract, self).__init__(aggr=aggr_type)  # "Add" aggregation.
 
         config.simulation = config.simulation
         config.graph_model = config.graph_model
@@ -405,7 +405,7 @@ def plot_embedding_func_cluster_state(model, config, config_file, embedding_clus
     plt.close()
 
     fig, ax = fig_init()
-    if config.graph_model.signal_model_name == 'PDE_N':
+    if 'PDE_N' in config.graph_model.signal_model_name:
         model_MLP_ = model.lin_phi
     else:
         model_MLP_ = model.lin_edge
@@ -439,7 +439,6 @@ def plot_embedding_func_cluster_state(model, config, config_file, embedding_clus
                                                       n_particle_types, embedding_cluster)
 
     type_list_short = type_list[index]
-    accuracy = metrics.accuracy_score(type_list_short, new_labels)
 
     model_a_list_short = model.a[1,index, :].clone().detach()
     median_center_list = []
@@ -454,13 +453,14 @@ def plot_embedding_func_cluster_state(model, config, config_file, embedding_clus
 
     distance = torch.sum((model_a[:, None, :] - median_center_list[None, :, :]) ** 2, dim=2)
     result = distance.min(dim=1)
-    min_value = result.values
     min_index = result.indices
 
     new_labels = to_numpy(min_index).astype(int)
 
     with torch.no_grad():
         model.a[1] = median_center_list[new_labels].clone().detach()
+
+    accuracy = metrics.accuracy_score(type_list, new_labels)
 
     return accuracy, n_clusters, new_labels
 
@@ -490,7 +490,7 @@ def plot_embedding_func_cluster(model, config, config_file, embedding_cluster, c
     plt.close()
 
     fig, ax = fig_init()
-    if config.graph_model.signal_model_name == 'PDE_N':
+    if 'PDE_N' in config.graph_model.signal_model_name:
         model_MLP_ = model.lin_phi
     else:
         model_MLP_ = model.lin_edge
@@ -852,99 +852,154 @@ def plot_generated(config, run, style, step, device):
             plt.rcParams['text.usetex'] = True
             rc('font', **{'family': 'serif', 'serif': ['Palatino']})
 
-        matplotlib.rcParams['savefig.pad_inches'] = 0
-        fig = plt.figure(figsize=(12, 12))
-        ax = fig.add_subplot(1, 1, 1)
-        ax.xaxis.get_major_formatter()._usetex = False
-        ax.yaxis.get_major_formatter()._usetex = False
-        ax.xaxis.set_major_locator(plt.MaxNLocator(3))
-        ax.yaxis.set_major_locator(plt.MaxNLocator(3))
-        ax.xaxis.set_major_formatter(FormatStrFormatter('%.1f'))
-        ax.yaxis.set_major_formatter(FormatStrFormatter('%.1f'))
-        index_particles = []
-        for n in range(n_particle_types):
-            pos = torch.argwhere((T1.squeeze() == n) & (H1[:, 0].squeeze() == 1))
-            pos = to_numpy(pos[:, 0].squeeze()).astype(int)
-            index_particles.append(pos)
-            # plt.scatter(to_numpy(x[index_particles[n], 1]), to_numpy(x[index_particles[n], 2]),
-            #             s=marker_size, color=cmap.color(n))
 
-            size = set_size(x, index_particles[n], 10)
+        if 'voronoi' in style:
+            matplotlib.use("Qt5Agg")
+            matplotlib.rcParams['savefig.pad_inches'] = 0
 
-            plt.scatter(to_numpy(x[index_particles[n], 1]), to_numpy(x[index_particles[n], 2]),
-                        s=size/10, color=cmap.color(n))
-        dead_cell = np.argwhere(to_numpy(H1[:, 0]) == 0)
-        if len(dead_cell) > 0:
-            plt.scatter(to_numpy(X1[dead_cell[:, 0].squeeze(), 0]), to_numpy(X1[dead_cell[:, 0].squeeze(), 1]),
-                        s=2, color='k', alpha=0.5)
-        if 'latex' in style:
-            plt.xlabel(r'$x$', fontsize=78)
-            plt.ylabel(r'$y$', fontsize=78)
-            plt.xticks(fontsize=48.0)
-            plt.yticks(fontsize=48.0)
-        elif 'frame' in style:
-            plt.xlabel('x', fontsize=13)
-            plt.ylabel('y', fontsize=16)
-            plt.xticks(fontsize=16.0)
-            plt.yticks(fontsize=16.0)
-            ax.tick_params(axis='both', which='major', pad=15)
-            plt.text(0, 1.05,
-                     f'frame {it}, {int(n_particles_alive)} alive particles ({int(n_particles_dead)} dead), {edge_index.shape[1]} edges  ',
-                     ha='left', va='top', transform=ax.transAxes, fontsize=16)
-        plt.xticks([])
-        plt.yticks([])
-        plt.xlim([0,1])
-        plt.ylim([0,1])
-        plt.tight_layout()
-        num = f"{it:06}"
-        plt.savefig(f"./{log_dir}/generated_color/frame_{num}.tif", dpi=80)
-        plt.close()
 
-        matplotlib.rcParams['savefig.pad_inches'] = 0
-        fig = plt.figure(figsize=(12, 12))
-        ax = fig.add_subplot(1, 1, 1)
-        ax.xaxis.get_major_formatter()._usetex = False
-        ax.yaxis.get_major_formatter()._usetex = False
-        ax.xaxis.set_major_locator(plt.MaxNLocator(3))
-        ax.yaxis.set_major_locator(plt.MaxNLocator(3))
-        ax.xaxis.set_major_formatter(FormatStrFormatter('%.1f'))
-        ax.yaxis.set_major_formatter(FormatStrFormatter('%.1f'))
-        index_particles = []
-        for n in range(n_particle_types):
-            pos = torch.argwhere((T1.squeeze() == n) & (H1[:, 0].squeeze() == 1))
-            pos = to_numpy(pos[:, 0].squeeze()).astype(int)
-            index_particles.append(pos)
-            # plt.scatter(to_numpy(x[index_particles[n], 1]), to_numpy(x[index_particles[n], 2]),
-            #             s=marker_size, color=cmap.color(n))
-            size = set_size(x, index_particles[n], 10)
-            plt.scatter(to_numpy(x[index_particles[n], 1]), to_numpy(x[index_particles[n], 2]),
-                        s=size/10, color='k')
-        dead_cell = np.argwhere(to_numpy(H1[:, 0]) == 0)
-        if len(dead_cell) > 0:
-            plt.scatter(to_numpy(X1[dead_cell[:, 0].squeeze(), 0]), to_numpy(X1[dead_cell[:, 0].squeeze(), 1]),
-                        s=2, color='k', alpha=0.5)
-        if 'latex' in style:
-            plt.xlabel(r'$x$', fontsize=78)
-            plt.ylabel(r'$y$', fontsize=78)
-            plt.xticks(fontsize=48.0)
-            plt.yticks(fontsize=48.0)
-        elif 'frame' in style:
-            plt.xlabel('x', fontsize=13)
-            plt.ylabel('y', fontsize=16)
-            plt.xticks(fontsize=16.0)
-            plt.yticks(fontsize=16.0)
-            ax.tick_params(axis='both', which='major', pad=15)
-            plt.text(0, 1.05,
-                     f'frame {it}, {int(n_particles_alive)} alive particles ({int(n_particles_dead)} dead), {edge_index.shape[1]} edges  ',
-                     ha='left', va='top', transform=ax.transAxes, fontsize=16)
-        plt.xticks([])
-        plt.yticks([])
-        plt.xlim([0,1])
-        plt.ylim([0,1])
-        plt.tight_layout()
-        num = f"{it:06}"
-        plt.savefig(f"./{log_dir}/generated_bw/frame_{num}.tif", dpi=80)
-        plt.close()
+            vor, vertices_pos, vertices_per_cell = get_vertices(points=to_numpy(X1), device=device)
+            centroids, areas = get_voronoi_areas(vertices_pos, vertices_per_cell, device)
+
+            fig = plt.figure(figsize=(12, 12))
+            ax = fig.add_subplot(1, 1, 1)
+            plt.xticks([])
+            plt.yticks([])
+            index_particles = []
+
+            voronoi_plot_2d(vor, ax=ax, show_vertices=False, line_colors='black', line_width=1, line_alpha=0.5,
+                            point_size=0)
+
+            if 'color' in style:
+                for n in range(n_particle_types):
+                    pos = torch.argwhere((T1.squeeze() == n) & (H1[:, 0].squeeze() == 1))
+                    pos = to_numpy(pos[:, 0].squeeze()).astype(int)
+                    index_particles.append(pos)
+
+                    size = set_size(x, index_particles[n], 10) / 10
+
+                    patches = []
+                    for i in index_particles[n]:
+                        cell = vertices_per_cell[i]
+                        vertices = to_numpy(vertices_pos[cell, :])
+                        patches.append(Polygon(vertices, closed=True))
+
+                    pc = PatchCollection(patches, alpha=0.4, facecolors=cmap.color(n))
+                    ax.add_collection(pc)
+                    if 'center' in style:
+                        plt.scatter(to_numpy(X1[index_particles[n], 0]), to_numpy(X1[index_particles[n], 1]), s=size,
+                                    color=cmap.color(n))
+
+            if 'vertices' in style:
+                plt.scatter(to_numpy(vertices_pos[:, 0]), to_numpy(vertices_pos[:, 1]), s=5, color='k')
+
+            plt.xlim([-0.05, 1.05])
+            plt.ylim([-0.05, 1.05])
+            plt.tight_layout()
+
+            num = f"{it:06}"
+            if 'color' in style:
+                plt.savefig(f"./{log_dir}/generated_color/frame_{num}.tif", dpi=85.35)
+            else:
+                plt.savefig(f"./{log_dir}/generated_bw/frame_{num}.tif", dpi=85.35)
+            plt.close()
+
+
+        else:
+
+            matplotlib.rcParams['savefig.pad_inches'] = 0
+            fig = plt.figure(figsize=(12, 12))
+            ax = fig.add_subplot(1, 1, 1)
+            ax.xaxis.get_major_formatter()._usetex = False
+            ax.yaxis.get_major_formatter()._usetex = False
+            ax.xaxis.set_major_locator(plt.MaxNLocator(3))
+            ax.yaxis.set_major_locator(plt.MaxNLocator(3))
+            ax.xaxis.set_major_formatter(FormatStrFormatter('%.1f'))
+            ax.yaxis.set_major_formatter(FormatStrFormatter('%.1f'))
+            index_particles = []
+            for n in range(n_particle_types):
+                pos = torch.argwhere((T1.squeeze() == n) & (H1[:, 0].squeeze() == 1))
+                pos = to_numpy(pos[:, 0].squeeze()).astype(int)
+                index_particles.append(pos)
+                # plt.scatter(to_numpy(x[index_particles[n], 1]), to_numpy(x[index_particles[n], 2]),
+                #             s=marker_size, color=cmap.color(n))
+
+                size = set_size(x, index_particles[n], 10)
+
+                plt.scatter(to_numpy(x[index_particles[n], 1]), to_numpy(x[index_particles[n], 2]),
+                            s=size/10, color=cmap.color(n))
+            dead_cell = np.argwhere(to_numpy(H1[:, 0]) == 0)
+            if len(dead_cell) > 0:
+                plt.scatter(to_numpy(X1[dead_cell[:, 0].squeeze(), 0]), to_numpy(X1[dead_cell[:, 0].squeeze(), 1]),
+                            s=2, color='k', alpha=0.5)
+            if 'latex' in style:
+                plt.xlabel(r'$x$', fontsize=78)
+                plt.ylabel(r'$y$', fontsize=78)
+                plt.xticks(fontsize=48.0)
+                plt.yticks(fontsize=48.0)
+            elif 'frame' in style:
+                plt.xlabel('x', fontsize=13)
+                plt.ylabel('y', fontsize=16)
+                plt.xticks(fontsize=16.0)
+                plt.yticks(fontsize=16.0)
+                ax.tick_params(axis='both', which='major', pad=15)
+                plt.text(0, 1.05,
+                         f'frame {it}, {int(n_particles_alive)} alive particles ({int(n_particles_dead)} dead), {edge_index.shape[1]} edges  ',
+                         ha='left', va='top', transform=ax.transAxes, fontsize=16)
+            plt.xticks([])
+            plt.yticks([])
+            plt.xlim([0,1])
+            plt.ylim([0,1])
+            plt.tight_layout()
+            num = f"{it:06}"
+            plt.savefig(f"./{log_dir}/generated_color/frame_{num}.tif", dpi=80)
+            plt.close()
+
+            matplotlib.rcParams['savefig.pad_inches'] = 0
+            fig = plt.figure(figsize=(12, 12))
+            ax = fig.add_subplot(1, 1, 1)
+            ax.xaxis.get_major_formatter()._usetex = False
+            ax.yaxis.get_major_formatter()._usetex = False
+            ax.xaxis.set_major_locator(plt.MaxNLocator(3))
+            ax.yaxis.set_major_locator(plt.MaxNLocator(3))
+            ax.xaxis.set_major_formatter(FormatStrFormatter('%.1f'))
+            ax.yaxis.set_major_formatter(FormatStrFormatter('%.1f'))
+            index_particles = []
+            for n in range(n_particle_types):
+                pos = torch.argwhere((T1.squeeze() == n) & (H1[:, 0].squeeze() == 1))
+                pos = to_numpy(pos[:, 0].squeeze()).astype(int)
+                index_particles.append(pos)
+                # plt.scatter(to_numpy(x[index_particles[n], 1]), to_numpy(x[index_particles[n], 2]),
+                #             s=marker_size, color=cmap.color(n))
+                size = set_size(x, index_particles[n], 10)
+                plt.scatter(to_numpy(x[index_particles[n], 1]), to_numpy(x[index_particles[n], 2]),
+                            s=size/10, color='k')
+            dead_cell = np.argwhere(to_numpy(H1[:, 0]) == 0)
+            if len(dead_cell) > 0:
+                plt.scatter(to_numpy(X1[dead_cell[:, 0].squeeze(), 0]), to_numpy(X1[dead_cell[:, 0].squeeze(), 1]),
+                            s=2, color='k', alpha=0.5)
+            if 'latex' in style:
+                plt.xlabel(r'$x$', fontsize=78)
+                plt.ylabel(r'$y$', fontsize=78)
+                plt.xticks(fontsize=48.0)
+                plt.yticks(fontsize=48.0)
+            elif 'frame' in style:
+                plt.xlabel('x', fontsize=13)
+                plt.ylabel('y', fontsize=16)
+                plt.xticks(fontsize=16.0)
+                plt.yticks(fontsize=16.0)
+                ax.tick_params(axis='both', which='major', pad=15)
+                plt.text(0, 1.05,
+                         f'frame {it}, {int(n_particles_alive)} alive particles ({int(n_particles_dead)} dead), {edge_index.shape[1]} edges  ',
+                         ha='left', va='top', transform=ax.transAxes, fontsize=16)
+            plt.xticks([])
+            plt.yticks([])
+            plt.xlim([0,1])
+            plt.ylim([0,1])
+            plt.tight_layout()
+            num = f"{it:06}"
+            plt.savefig(f"./{log_dir}/generated_bw/frame_{num}.tif", dpi=80)
+            plt.close()
 
 
 def plot_confusion_matrix(index, true_labels, new_labels, n_particle_types, epoch, it, fig, ax):
@@ -1222,13 +1277,7 @@ def plot_attraction_repulsion_state(config_file, epoch_list, log_dir, logger, de
             model_a = model.a.clone().detach()
 
         cell_id = 400
-        state_time_series = get_time_series(x_list=x_list[1], cell_id=cell_id, feature='type')
-        reconstructed_time_series = get_embedding_time_series(model=model, dataset_number=1, cell_id=cell_id,
-                                                              n_particles=n_particles, n_frames=n_frames,
-                                                              has_cell_division=has_cell_division)
 
-        config.training.cluster_method = 'kmeans_auto_plot'
-        config.training.cluster_distance_threshold = 0.01
         alpha=0.1
         accuracy, n_clusters, new_labels = plot_embedding_func_cluster_state(model, config, config_file, embedding_cluster,
                                                                        cmap, index_particles, type_list,
@@ -1268,6 +1317,62 @@ def plot_attraction_repulsion_state(config_file, epoch_list, log_dir, logger, de
         plt.tight_layout()
         plt.savefig(f"./{log_dir}/results/true_func_{config_file}.tif", dpi=170.7)
         plt.close()
+
+        GT_time_series_list=[]
+        learned_time_series_list=[]
+        accuracy_list=[]
+        for cell_id in trange(n_particles):
+            GT_time_series = get_time_series(x_list=x_list[1], cell_id=cell_id, feature='type')
+            learned_time_series = get_type_time_series(new_labels=new_labels, dataset_number=1, cell_id=cell_id,
+                                                                  n_particles=n_particles, n_frames=n_frames,
+                                                                  has_cell_division=has_cell_division)
+            GT_time_series_list.append(GT_time_series)
+            learned_time_series_list.append(learned_time_series)
+            accuracy = metrics.accuracy_score(GT_time_series[0:250], learned_time_series[0:250])
+            accuracy_list.append(accuracy)
+        GT_time_series = np.stack(GT_time_series_list)
+        learned_time_series = np.stack(learned_time_series_list)
+        accuracy = np.array(accuracy_list)
+
+        print(f'accuracy: {np.mean(accuracy)} +/- {np.std(accuracy)}')
+
+        fig, ax = fig_init(formatx='%.0f', formaty='%.0f')
+        plt.imshow(GT_time_series, aspect='auto', cmap='tab10',vmin=0, vmax=2)
+        plt.xlabel('frame', fontsize=78)
+        plt.ylabel('cell_id', fontsize=78)
+        plt.tight_layout()
+        plt.savefig(f"./{log_dir}/results/true_kinograph_{config_file}.tif", dpi=170.7)
+        plt.close()
+
+
+        fig, ax = fig_init(formatx='%.0f', formaty='%.0f')
+        plt.imshow(learned_time_series, aspect='auto', cmap='tab10',vmin=0, vmax=2)
+        plt.xlabel('frame', fontsize=78)
+        plt.ylabel('cell_id', fontsize=78)
+        plt.tight_layout()
+        plt.savefig(f"./{log_dir}/results/learned_kinograph_{config_file}.tif", dpi=170.7)
+        plt.close()
+
+        cell_id = 800
+        GT_time_series = get_time_series(x_list=x_list[1], cell_id=cell_id, feature='type')
+        learned_time_series = get_type_time_series(new_labels=new_labels, dataset_number=1, cell_id=cell_id,
+                                                   n_particles=n_particles, n_frames=n_frames,
+                                                   has_cell_division=has_cell_division)
+        fig = plt.figure(figsize=(6, 12))
+        ax = fig.add_subplot(2, 1, 1)
+        plt.plot(GT_time_series, color='k', ls="--")
+        plt.ylim([0,2])
+        plt.ylabel('cell type', fontsize=32)
+        ax = fig.add_subplot(2, 1, 2)
+        plt.plot(learned_time_series, color='k', ls="--")
+        plt.ylim([0,2])
+        plt.ylabel('cell type', fontsize=32)
+        plt.xlabel('frame', fontsize=32)
+        plt.tight_layout()
+        plt.savefig(f"./{log_dir}/results/comparison_sequence_{config_file}.tif", dpi=170.7)
+        plt.close()
+
+        print(f'accuracy {metrics.accuracy_score(GT_time_series[0:250], learned_time_series[0:250])}')
 
 
 def plot_attraction_repulsion_tracking(config_file, epoch_list, log_dir, logger, device):
@@ -2676,7 +2781,7 @@ def plot_boids(config_file, epoch_list, log_dir, logger, device):
     for epoch in epoch_list:
 
         model, bc_pos, bc_dpos = choose_training_model(config, device)
-        model = Interaction_Particles_extract(config, device, aggr_type=config.graph_model.aggr_type, bc_dpos=bc_dpos)
+        model = Interaction_Particle_extract(config, device, aggr_type=config.graph_model.aggr_type, bc_dpos=bc_dpos)
 
         net = f"./log/try_{config_file}/models/best_model_with_{n_runs - 1}_graphs_{epoch}.pt"
         state_dict = torch.load(net, map_location=device)
@@ -3940,6 +4045,9 @@ def plot_signal(config_file, epoch_list, log_dir, logger, cc, device):
         plt.close()
 
         fig, ax = fig_init()
+        plt.scatter(to_numpy(adjacency),to_numpy(model.vals)*coeff)
+
+        fig, ax = fig_init()
         gt_weight = to_numpy(adjacency)
         pred_weight = to_numpy(model.vals) * coeff
         x_data = np.reshape(gt_weight, (n_particles * n_particles))
@@ -4278,7 +4386,7 @@ def data_plot(config, config_file, epoch_list, device):
             plot_RD_RPS(config_file=config_file, epoch_list=epoch_list, log_dir=log_dir, logger=logger, cc='viridis',
                            device=device)
 
-    if config.graph_model.signal_model_name=='PDE_N':
+    if 'PDE_N' in config.graph_model.signal_model_name:
         plot_signal(config_file, epoch_list, log_dir, logger, 'viridis', device)
 
     for handler in logger.handlers[:]:
@@ -4534,13 +4642,15 @@ if __name__ == '__main__':
 
     matplotlib.use("Qt5Agg")
 
-    config_list =['arbitrary_3_sequence_d']
+    config_list =['arbitrary_3_sequence_d','arbitrary_3_sequence_e']
+
     # config_list = ['signal_N_100_2_d']
     # config_list = ['signal_N_100_2_asym_a']
+    # config_list = ['boids_16_256_division_model_2_new']
     for config_file in config_list:
         config = ParticleGraphConfig.from_yaml(f'./config/{config_file}.yaml')
-        data_plot(config=config, config_file=config_file, epoch_list=['20'], device=device)
-        # plot_generated(config=config, run=0, style='color Voronoi', step = 5, device=device)
+        data_plot(config=config, config_file=config_file, epoch_list=['15','20'], device=device)
+        # plot_generated(config=config, run=0, style='white voronoi', step = 120, device=device)
         # plot_focused_on_cell(config=config, run=0, style='color', cell_id=175, step = 5, device=device)
 
     # f_list = ['supp10']

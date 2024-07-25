@@ -14,7 +14,7 @@ simulation:
   cell_death_rate: [0,0,0,0,0,0,0,0]
   mc_slope: [-30, -15, 15, 30, -30, -15, 15, 30]
   final_cell_mass: [200, 300, 400, 500, 200, 300, 400, 500]
-  area: [-1]
+  cell_area: [-1]
   min_radius: 0.001
   max_radius: 0.04
   max_edges: 500000

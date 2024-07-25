@@ -1,5 +1,5 @@
 description: 'Boids 16 different types, division'
-dataset: 'boids_16_division_model_2_Voronoi_color'
+dataset: 'boids_16_division_model_2_Voronoi'
 
 simulation:
   params: [[42.031494,  19.948257,  89.53507  ],

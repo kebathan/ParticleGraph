@@ -33,7 +33,7 @@ from ParticleGraph.utils import *
 if __name__ == '__main__':
 
     #config_list = ['boids_16_division_model_2_Voronoi_a', 'boids_16_division_model_2_Voronoi_b', 'boids_16_division_model_2_Voronoi_c']
-    config_list = ["boids_16_division_model_2_Voronoi_nrmlzd4"]
+    config_list = ["boids_voronoi_division_fortrain"]
 
 
     for config_file in config_list:
@@ -41,7 +41,6 @@ if __name__ == '__main__':
         device = set_device(config.training.device)
         print(f'device {device}')
 
-        data_generate(config, device=device, visualize=True, run_vizualized=0, style='voronoi', alpha=1, erase=True, bSave=True, step=config.simulation.n_frames // config.simulation.n_frames)
+        data_generate(config, device=device, visualize=True, run_vizualized=0, style='voronoi', alpha=1, erase=True, bSave=True, step=config.simulation.n_frames // 150)
         # data_train(config, config_file, device)
         # data_test(config=config, config_file=config_file, visualize=True, style='latex frame color', verbose=False, best_model=20, run=1, step=config.simulation.n_frames // 3, test_simulation=False, sample_embedding=False, device=device)    # config.simulation.n_frames // 7
-

@@ -5,7 +5,7 @@ from ParticleGraph.utils import to_numpy
 from ParticleGraph.models.Siren_Network import *
 
 
-class Interaction_Cell(pyg.nn.MessagePassing):
+class Interaction_Agent(pyg.nn.MessagePassing):
     """Interaction Network as proposed in this paper:
     https://proceedings.neurips.cc/paper/2016/hash/3147da8ab4a0437c15ef51a5cc7f2dc4-Abstract.html"""
 
@@ -26,7 +26,7 @@ class Interaction_Cell(pyg.nn.MessagePassing):
 
     def __init__(self, config, device, aggr_type=None, bc_dpos=None, dimension=2):
 
-        super(Interaction_Cell, self).__init__(aggr=aggr_type)  # "Add" aggregation.
+        super(Interaction_Agent, self).__init__(aggr=aggr_type)  # "Add" aggregation.
 
         simulation_config = config.simulation
         model_config = config.graph_model
@@ -59,33 +59,28 @@ class Interaction_Cell(pyg.nn.MessagePassing):
         self.lin_edge = MLP(input_size=self.input_size, output_size=self.output_size, nlayers=self.n_layers,
                                 hidden_size=self.hidden_dim, device=self.device)
 
-        if simulation_config.has_cell_division :
+        if self.has_state:
             self.a = nn.Parameter(
-                torch.tensor(np.ones((self.n_dataset, self.n_particles_max, 2)), device=self.device,
-                             requires_grad=True, dtype=torch.float32))
-            if self.update_type == 'embedding_MLP':
-                self.b = nn.Parameter(
-                    torch.tensor(np.ones((self.n_dataset, 20500, 2)), device=self.device,
-                                 requires_grad=True, dtype=torch.float32))
-                self.phi = MLP(input_size=3, output_size=1, nlayers=5, hidden_size=32, device=self.device)
-        elif self.has_state:
-            self.a = nn.Parameter(
-                torch.tensor(np.ones((self.n_dataset, int(self.n_frames * (self.n_particles + self.n_ghosts)), self.embedding_dim)),
+                torch.tensor(np.ones((self.n_dataset, int(self.n_frames), int(self.n_particles), self.embedding_dim)),
                              device=self.device,
                              requires_grad=True, dtype=torch.float32))
         else:
             self.a = nn.Parameter(
-                torch.tensor(np.ones((self.n_dataset, int(self.n_particles) + self.n_ghosts, self.embedding_dim)), device=self.device,
+                torch.tensor(np.ones((self.n_dataset, int(self.n_particles), self.embedding_dim)), device=self.device,
                              requires_grad=True, dtype=torch.float32))
 
+        if self.update_type == 'linear':
+            self.phi = MLP(input_size=6, output_size=2, nlayers=5, hidden_size=64, device=self.device)
 
-    def forward(self, data=[], data_id=[], training=[], vnorm=[], phi=[], has_field=False):
+
+    def forward(self, data=[], data_id=[], training=[], vnorm=[], phi=[], frame=[], has_field=False):
 
         self.data_id = data_id
         self.vnorm = vnorm
         self.cos_phi = torch.cos(phi)
         self.sin_phi = torch.sin(phi)
         self.training = training
+        self.frame = frame
         self.has_field = has_field
 
         x, edge_index = data.x, data.edge_index
@@ -98,26 +93,25 @@ class Interaction_Cell(pyg.nn.MessagePassing):
 
         pos = x[:, 1:self.dimension+1]
         d_pos = x[:, self.dimension+1:1+2*self.dimension]
+        features = x[:, 1+2*self.dimension:]
         particle_id = x[:, 0:1]
-        area = x[:, 14:15]
 
-        pred = self.propagate(edge_index, pos=pos, d_pos=d_pos, particle_id=particle_id, field=field, area=area)
+        pred = self.propagate(edge_index, pos=pos, d_pos=d_pos, particle_id=particle_id, field=field, features=features)
 
         if self.update_type == 'linear':
-            embedding = self.a[self.data_id, to_numpy(particle_id), :].squeeze()
-            pred = self.lin_update(torch.cat((pred, x[:, 3:5], embedding), dim=-1))
+            if self.has_state:
+                embedding = self.a[self.data_id, self.frame, to_numpy(particle_id), :].squeeze()
+            else:
+                embedding = self.a[self.data_id, to_numpy(particle_id), :].squeeze()
 
-        if self.update_type == 'embedding_Siren':
-            embedding = self.b[self.data_id, to_numpy(particle_id), :].squeeze()
-            in_features = torch.cat((x[:, 8:9]/250, embedding), dim=-1)
-            self.phi_ =  self.phi(in_features).repeat(1,2)
-            pred = pred * self.phi_
+            in_features = torch.cat((d_pos, pred, embedding), dim=-1)
+            pred = self.phi(in_features)
 
         return pred
 
-    def message(self, pos_i, pos_j, d_pos_i, d_pos_j, particle_id_i, particle_id_j, field_j, area_i, area_j):
+    def message(self, pos_i, pos_j, d_pos_i, d_pos_j, particle_id_i, particle_id_j, field_j, features_i, features_j):
         # distance normalized by the max radius
-        r = torch.sqrt(torch.sum(self.bc_dpos(pos_j - pos_i) ** 2, dim=1)) / self.max_radius
+        r = torch.sqrt(torch.sum(self.bc_dpos(pos_j - pos_i) ** 2, dim=1))
         delta_pos = self.bc_dpos(pos_j - pos_i) / self.max_radius
         dpos_x_i = d_pos_i[:, 0] / self.vnorm
         dpos_y_i = d_pos_i[:, 1] / self.vnorm
@@ -141,21 +135,18 @@ class Interaction_Cell(pyg.nn.MessagePassing):
             dpos_x_j = new_dpos_x_j
             dpos_y_j = new_dpos_y_j
 
-        embedding_i = self.a[self.data_id, to_numpy(particle_id_i), :].squeeze()
-        embedding_j = self.a[self.data_id, to_numpy(particle_id_j), :].squeeze()
+        if self.has_state:
+            embedding_i = self.a[self.data_id, self.frame, to_numpy(particle_id_i), :].squeeze()
+            embedding_j = self.a[self.data_id, self.frame, to_numpy(particle_id_j), :].squeeze()
+        else:
+            embedding_i = self.a[self.data_id, to_numpy(particle_id_i), :].squeeze()
+            embedding_j = self.a[self.data_id, to_numpy(particle_id_j), :].squeeze()
 
         match self.model:
-
-            case 'PDE_Cell_A':
-                in_features = torch.cat((delta_pos, r[:, None], embedding_i), dim=-1)
-
-            case 'PDE_Cell_B':
-                in_features = torch.cat((delta_pos, r[:, None], dpos_x_i[:, None], dpos_y_i[:, None], dpos_x_j[:, None],
-                                         dpos_y_j[:, None], embedding_i), dim=-1)
-
-            case 'PDE_Cell_B_area':
-                in_features = torch.cat((delta_pos, r[:, None], dpos_x_i[:, None], dpos_y_i[:, None], dpos_x_j[:, None],
-                                         dpos_y_j[:, None], area_i, area_j, embedding_i, embedding_j), dim=-1)
+            case 'PDE_Agents_A':
+                in_features = torch.cat((delta_pos, r[:, None], dpos_x_i[:, None], dpos_y_i[:, None], dpos_x_j[:, None], dpos_y_j[:, None], embedding_i), dim=-1)
+            case 'PDE_Agents_B':
+                in_features = torch.cat((delta_pos, r[:, None], dpos_x_i[:, None], dpos_y_i[:, None], dpos_x_j[:, None], dpos_y_j[:, None], embedding_i, features_j), dim=-1)
 
         out = self.lin_edge(in_features) * field_j
 

@@ -21,6 +21,7 @@ class SimulationConfig(BaseModel):
     cell_area: list[float] = [-1]
     min_radius: Annotated[float, Field(ge=0)] = 0
     max_radius: Annotated[float, Field(gt=0)]
+    n_neighbors: int = 10
     angular_sigma: float = 0
     angular_Bernouilli: list[float] =[-1]
     max_edges: float = 1.0E6
@@ -37,6 +38,7 @@ class SimulationConfig(BaseModel):
     pos_rate: list[list[float]] = None
     neg_rate: list[list[float]] = None
     has_cell_division: bool = False
+    has_cell_death: bool = False
     cell_inert_model_coeff: float = 0
     cell_active_model_coeff: float = 1
     n_frames: int = 1000
@@ -149,6 +151,10 @@ class TrainingConfig(BaseModel):
     cluster_method: Literal['kmeans', 'kmeans_auto_plot', 'kmeans_auto_embedding', 'distance_plot', 'distance_embedding', 'distance_both', 'inconsistent_plot', 'inconsistent_embedding', 'none'] = 'distance_plot'
     cluster_distance_threshold: float = 0.01
     cluster_connectivity: Literal['single','average'] = 'single'
+
+    state_hot_encoding: bool = False
+    state_temperature: float = 0.5
+
     device: Annotated[str, Field(pattern=r'^(auto|cpu|cuda:\d+)$')] = 'auto'
 
 

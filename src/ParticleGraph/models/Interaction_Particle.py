@@ -3,6 +3,7 @@ import torch_geometric.utils as pyg_utils
 from ParticleGraph.models.MLP import MLP
 from ParticleGraph.utils import to_numpy
 from ParticleGraph.models.Siren_Network import *
+from ParticleGraph.models.Gumbel import gumbel_softmax_sample, gumbel_softmax
 
 
 class Interaction_Particle(pyg.nn.MessagePassing):
@@ -38,6 +39,7 @@ class Interaction_Particle(pyg.nn.MessagePassing):
         self.hidden_dim = model_config.hidden_dim
         self.n_layers = model_config.n_mp_layers
         self.n_particles = simulation_config.n_particles
+        self.n_particle_types = simulation_config.n_particle_types
         self.max_radius = simulation_config.max_radius
         self.data_augmentation = train_config.data_augmentation
         self.noise_level = train_config.noise_level
@@ -55,6 +57,12 @@ class Interaction_Particle(pyg.nn.MessagePassing):
         self.dimension = dimension
         self.has_state = config.simulation.state_type != 'discrete'
         self.n_frames = simulation_config.n_frames
+        self.state_hot_encoding = train_config.state_hot_encoding
+        
+        temperature = train_config.state_temperature
+        self.temperature = torch.tensor(temperature, device=self.device)
+
+
 
         self.lin_edge = MLP(input_size=self.input_size, output_size=self.output_size, nlayers=self.n_layers,
                                 hidden_size=self.hidden_dim, device=self.device)
@@ -69,17 +77,25 @@ class Interaction_Particle(pyg.nn.MessagePassing):
                                  requires_grad=True, dtype=torch.float32))
                 self.phi = MLP(input_size=3, output_size=1, nlayers=5, hidden_size=32, device=self.device)
         elif self.has_state:
-            self.a = nn.Parameter(
-                torch.tensor(np.ones((self.n_dataset, int(self.n_frames * (self.n_particles + self.n_ghosts)), self.embedding_dim)),
-                             device=self.device,
-                             requires_grad=True, dtype=torch.float32))
+            if self.state_hot_encoding:
+                self.a = nn.Parameter(
+                    torch.tensor(np.ones((self.n_dataset, int(self.n_frames), int(self.n_particles + self.n_ghosts), self.n_particle_types)),
+                                 device=self.device, requires_grad=True, dtype=torch.float32))
+                angles = np.linspace(0, 2 * np.pi, self.n_particle_types+1)[:-1]
+                b_ = np.array([np.cos(angles), np.sin(angles)]).T
+                self.b = nn.Parameter(
+                    torch.tensor(b_, device=self.device, requires_grad=True, dtype=torch.float32))
+            else:
+                self.a = nn.Parameter(
+                    torch.tensor(np.ones((self.n_dataset, int(self.n_frames),  int(self.n_particles + self.n_ghosts), self.embedding_dim)),
+                                 device=self.device, requires_grad=True, dtype=torch.float32))
         else:
             self.a = nn.Parameter(
                 torch.tensor(np.ones((self.n_dataset, int(self.n_particles) + self.n_ghosts, self.embedding_dim)), device=self.device,
                              requires_grad=True, dtype=torch.float32))
 
 
-    def forward(self, data=[], data_id=[], training=[], vnorm=[], phi=[], has_field=False):
+    def forward(self, data=[], data_id=[], training=[], vnorm=[], phi=[], has_field=False, frame=[]):
 
         self.data_id = data_id
         self.vnorm = vnorm
@@ -100,7 +116,13 @@ class Interaction_Particle(pyg.nn.MessagePassing):
         d_pos = x[:, self.dimension+1:1+2*self.dimension]
         particle_id = x[:, 0:1]
 
-        pred = self.propagate(edge_index, pos=pos, d_pos=d_pos, particle_id=particle_id, field=field)
+        if not(self.state_hot_encoding):
+            embedding = self.a[self.data_id, frame, to_numpy(particle_id), :].squeeze()
+        else:
+            model_a = gumbel_softmax(self.a[self.data_id, frame, to_numpy(particle_id), :].squeeze(), self.temperature, hard=True, device=self.device)
+            embedding = torch.matmul(model_a, self.b)
+
+        pred = self.propagate(edge_index, pos=pos, d_pos=d_pos, embedding=embedding, field=field)
 
         if self.update_type == 'linear':
             embedding = self.a[self.data_id, to_numpy(particle_id), :].squeeze()
@@ -114,7 +136,7 @@ class Interaction_Particle(pyg.nn.MessagePassing):
 
         return pred
 
-    def message(self, pos_i, pos_j, d_pos_i, d_pos_j, particle_id_i, particle_id_j, field_j):
+    def message(self, pos_i, pos_j, d_pos_i, d_pos_j, embedding_i, embedding_j, field_j):
         # distance normalized by the max radius
         r = torch.sqrt(torch.sum(self.bc_dpos(pos_j - pos_i) ** 2, dim=1)) / self.max_radius
         delta_pos = self.bc_dpos(pos_j - pos_i) / self.max_radius
@@ -122,9 +144,6 @@ class Interaction_Particle(pyg.nn.MessagePassing):
         dpos_y_i = d_pos_i[:, 1] / self.vnorm
         dpos_x_j = d_pos_j[:, 0] / self.vnorm
         dpos_y_j = d_pos_j[:, 1] / self.vnorm
-        if self.dimension == 3:
-            dpos_z_i = d_pos_i[:, 2] / self.vnorm
-            dpos_z_j = d_pos_j[:, 2] / self.vnorm
 
         if self.data_augmentation & (self.training == True):
             new_delta_pos_x = self.cos_phi * delta_pos[:, 0] + self.sin_phi * delta_pos[:, 1]
@@ -139,9 +158,6 @@ class Interaction_Particle(pyg.nn.MessagePassing):
             new_dpos_y_j = -self.sin_phi * dpos_x_j + self.cos_phi * dpos_y_j
             dpos_x_j = new_dpos_x_j
             dpos_y_j = new_dpos_y_j
-
-        embedding_i = self.a[self.data_id, to_numpy(particle_id_i), :].squeeze()
-        embedding_j = self.a[self.data_id, to_numpy(particle_id_j), :].squeeze()
 
         match self.model:
             case 'PDE_A'|'PDE_ParticleField_A':
@@ -163,21 +179,6 @@ class Interaction_Particle(pyg.nn.MessagePassing):
                     (delta_pos, r[:, None], embedding_i, embedding_j), dim=-1)
 
         out = self.lin_edge(in_features) * field_j
-
-        if self.model == 'PDE_B':
-            self.diffx = delta_pos * self.max_radius
-            self.lin_edge_out = out
-            self.particle_id = particle_id_i
-        if self.model == 'PDE_A_bis':
-            self.diffx = delta_pos * self.max_radius
-            self.lin_edge_out = out
-            self.particle_id_i = particle_id_i
-            self.particle_id_j = particle_id_j
-        if self.model == 'PDE_GS':
-            self.in_features = in_features
-            self.r = r
-            self.lin_edge_out = out
-
 
         return out
 

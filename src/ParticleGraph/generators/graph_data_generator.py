@@ -76,8 +76,7 @@ def data_generate_particle(config, visualize=True, run_vizualized=0, style='colo
     if erase:
         files = glob.glob(f"{folder}/*")
         for f in files:
-            if (f[-14:] != 'generated_data') & (f != 'p.pt') & (f != 'cycle_length.pt') & (f != 'model_config.json') & (
-                    f != 'generation_code.py'):
+            if (f[-3:] != 'Fig') & (f[-14:] != 'generated_data') & (f != 'p.pt') & (f != 'cycle_length.pt') & (f != 'model_config.json') & (f != 'generation_code.py'):
                 os.remove(f)
     os.makedirs(folder, exist_ok=True)
     os.makedirs(f'./graphs_data/graphs_{dataset_name}/Fig/', exist_ok=True)
@@ -405,6 +404,8 @@ def data_generate_cell(config, visualize=True, run_vizualized=0, style='color', 
     dataset_name = config.dataset
     marker_size = config.plotting.marker_size
     has_inert_model = simulation_config.cell_inert_model_coeff > 0
+    has_cell_death = simulation_config.has_cell_death
+    has_cell_division = True
 
     max_radius_list = []
     edges_len_list = []
@@ -441,8 +442,7 @@ def data_generate_cell(config, visualize=True, run_vizualized=0, style='color', 
         d_pos = []
         x_len_list = []
         edge_p_p_list = []
-        x_vertices_list = []
-        y_vertices_list = []
+        vertices_pos_list = []
         vertices_per_cell_list = []
 
         '''
@@ -503,22 +503,23 @@ def data_generate_cell(config, visualize=True, run_vizualized=0, style='color', 
         for it in trange(simulation_config.start_frame, n_frames + 1):
 
             # calculate cell death and cell division
-            if (it > 0) & (n_particles_alive < simulation_config.n_particles_max):
+
+            if has_cell_death:
                 # cell death
                 sample = torch.rand(len(X1), device=device)
                 H1[sample.squeeze() < DR1.squeeze() / 5E4, 0] = 0
                 # removal if too small
-                pos = torch.argwhere(AR1.squeeze()<1E-5)# & (T1.squeeze() == 0))
+                pos = torch.argwhere(AR1.squeeze()<5E-6)# & (T1.squeeze() == 0))
                 if len(pos) > 0:
                     H1[pos,0]=0
                 n_particles_alive = torch.sum(H1[:, 0])
                 n_particles_dead = n_particles - n_particles_alive
 
+            if (it > 0) & (has_cell_division):
 
                 # cell division
                 pos = torch.argwhere(
-                    (A1.squeeze() >= CL1.squeeze()) & (H1[:, 0].squeeze() == 1) & (S1[:, 0].squeeze() == 3) & (
-                                n_particles_alive < n_particles_max)).flatten()
+                    (A1.squeeze() >= CL1.squeeze()) & (H1[:, 0].squeeze() == 1) & (S1[:, 0].squeeze() == 3) & (n_particles_alive < n_particles_max)).flatten()
                 if (len(pos) > 0):
                     n_add_nodes = len(pos) * 2
                     pos = to_numpy(pos).astype(int)
@@ -569,27 +570,33 @@ def data_generate_cell(config, visualize=True, run_vizualized=0, style='color', 
                     AR1 = torch.cat((AR1, AR1[pos, :], AR1[pos, :]), dim=0)
                     R1 = M1 / (2 * CL1)
 
-                alive = torch.argwhere(H1[:, 0] == 1).squeeze()
+                    n_particles_alive = torch.sum(H1[:, 0])
 
-                N1 = N1[alive]
-                X1 = X1[alive]
-                V1 = V1[alive]
-                T1 = T1[alive]
-                H1 = H1[alive]
-                A1 = A1[alive]
-                S1 = S1[alive]
-                M1 = M1[alive]
-                CL1 = CL1[alive]
-                R1 = R1[alive]
-                DR1 = DR1[alive]
-                MC1 = MC1[alive]
-                AR1 = AR1[alive]
+                    if (n_particles_alive >= simulation_config.n_particles_max):
+                        has_cell_division = False
+                        has_cell_death = False
 
-                index_particles = []
-                for n in range(n_particle_types):
-                    pos = torch.argwhere(T1 == n)
-                    pos = to_numpy(pos[:, 0].squeeze()).astype(int)
-                    index_particles.append(pos)
+            alive = torch.argwhere(H1[:, 0] == 1).squeeze()
+
+            N1 = N1[alive]
+            X1 = X1[alive]
+            V1 = V1[alive]
+            T1 = T1[alive]
+            H1 = H1[alive]
+            A1 = A1[alive]
+            S1 = S1[alive]
+            M1 = M1[alive]
+            CL1 = CL1[alive]
+            R1 = R1[alive]
+            DR1 = DR1[alive]
+            MC1 = MC1[alive]
+            AR1 = AR1[alive]
+
+            index_particles = []
+            for n in range(n_particle_types):
+                pos = torch.argwhere(T1 == n)
+                pos = to_numpy(pos[:, 0].squeeze()).astype(int)
+                index_particles.append(pos)
 
             # calculate cell type change
             if simulation_config.state_type == 'sequence':
@@ -635,7 +642,7 @@ def data_generate_cell(config, visualize=True, run_vizualized=0, style='color', 
             # model prediction
             with torch.no_grad():
                 y = model(dataset, has_field=True)
-                y = y * alive[:, None].repeat(1, 2)
+                y = y * alive[:, None].repeat(1, 2) * simulation_config.cell_active_model_coeff
 
             first_X1 = X1.clone().detach()
 
@@ -650,47 +657,35 @@ def data_generate_cell(config, visualize=True, run_vizualized=0, style='color', 
                 target_areas_per_type = torch.tensor([cell_area[i] / coeff for i in range(n_particle_types)], device=device)
                 target_areas = target_areas_per_type[to_numpy(T1).astype(int)].squeeze().clone().detach()
 
-
                 X1_ = X1.clone().detach()
                 X1_.requires_grad = True
 
                 optimizer = torch.optim.Adam([X1_], lr=1E-3)
 
-                # rnd_index = torch.randperm(len(X1), device=device)
-                # mask = torch.argwhere(rnd_index % 8 == n).squeeze()
-
                 optimizer.zero_grad()
                 vor, vertices_pos, vertices_per_cell, all_points = get_vertices(points=X1_, device=device)
-                cc = get_Delaunay(all_points,device)
+                cc, tri = get_Delaunay(all_points,device)
                 distance = torch.sum((vertices_pos[:, None, :].clone().detach() - cc[None, :, :]) ** 2, dim=2)
                 result = distance.min(dim=1)
                 index = result.indices
                 cc = cc[index]
+                # tri = tri[index]
                 voronoi_area = get_voronoi_areas(cc, vertices_per_cell, device)
 
-                try:
-                    # loss = (target_areas[mask] - voronoi_area[mask]).norm(2)
-                    loss = (target_areas - voronoi_area).norm(2)
-                    loss.backward()
-                    optimizer.step()
-                except:
-                    logger.info('memory_usage pb during gradient descent')
-                    print('memory_usage pb during gradient descent')
-                    logger.info(f"GPU memory: total {t} reserved {r} allocated {a}")
-                    logger.info(
-                        f'{x.shape[0]} particles,  {edge_index.shape[1]} edges, max_radius: {np.round(max_radius, 3)}')
-                    memory_usage_x_list = 0
-                    memory_usage_edge_list = 0
-                    for n in range(len(x_list)):
-                        memory_usage_x_list += x_list[n].element_size() * x_list[n].nelement()
-                        memory_usage_edge_list += edge_p_p_list[n].nbytes
-                    logger.info(
-                        f'memory usage x_list: {memory_usage_x_list / 1E6} MB, memory usage edge_list: {memory_usage_edge_list / 1E6} MB')
+                AR1 = voronoi_area[:, None].clone().detach()
+
+                loss = (target_areas - voronoi_area).norm(2)
+                loss.backward()
+                optimizer.step()
+                print(loss.item())
 
                 X1_ = X1_.clone().detach()
                 X1 = bc_pos(X1_.clone().detach())
 
-            y_voronoi = (bc_dpos(X1 - first_X1) / delta_t - V1) / delta_t
+            if model_config.prediction == '2nd_derivative':
+                y_voronoi = (bc_dpos(X1 - first_X1) / delta_t - V1) / delta_t * simulation_config.cell_inert_model_coeff
+            else:
+                y_voronoi = bc_dpos(X1 - first_X1) / delta_t * simulation_config.cell_inert_model_coeff
 
             if (it) % 100 == 0:
                 t, r, a = get_gpu_memory_map(device)
@@ -709,22 +704,18 @@ def data_generate_cell(config, visualize=True, run_vizualized=0, style='color', 
             # append list
             if (it >= 0):
                 x_list.append(x)
-                y_list.append(y * simulation_config.cell_active_model_coeff + y_voronoi * simulation_config.cell_inert_model_coeff)
+                y_list.append(y + y_voronoi)
 
             # get mass_coeff
             # mass_coeff = set_mass_coeff(mc_slope_distrib, cell_mass[to_numpy(T1[:, 0])], M1, device)
 
             # cell update
             if model_config.prediction == '2nd_derivative':
-                V1 += y * delta_t * simulation_config.cell_active_model_coeff + y_voronoi * delta_t * simulation_config.cell_inert_model_coeff
+                V1 += (y + y_voronoi) * delta_t
             else:
-                V1 = y
-
-            V1 = V1 * alive[:, None].repeat(1, 2)
+                V1 = y + y_voronoi
 
             X1 = bc_pos(first_X1 + V1 * delta_t)
-
-            AR1 = voronoi_area[:, None].clone().detach()
 
             # output plots
             if visualize & (run == run_vizualized) & (it % step == 0) & (it >= 0):
@@ -837,19 +828,30 @@ def data_generate_cell(config, visualize=True, run_vizualized=0, style='color', 
                                 dpi=85.35)
                     plt.close()
 
-                fig = plt.figure(figsize=(12, 6))
-                ax = fig.add_subplot(1, 2, 1)
+
+                fig = plt.figure(figsize=(12, 12))
+                ax = fig.add_subplot(2, 2, 1)
                 plt.plot(max_radius_list)
                 plt.xlabel('Frame')
                 plt.ylabel('Max radius')
                 plt.ylim([0, simulation_config.max_radius * 1.1])
-                ax = fig.add_subplot(1, 2, 2)
+                ax = fig.add_subplot(2, 2, 2)
                 plt.plot(x_len_list, edges_len_list)
                 plt.xlabel('Number of particles')
                 plt.ylabel('Number of edges')
+                ax = fig.add_subplot(2, 2, 3)
+                plt.plot(x_len_list)
+                plt.xlabel('Number of particles')
+                plt.xlabel('Frame')
+                ax = fig.add_subplot(2, 2, 4)
+                for n in range(n_particle_types):
+                    pos = torch.argwhere((T1.squeeze() == n) & (H1[:, 0].squeeze() == 1))
+                    if pos.shape[0] > 1:
+                        plt.hist(to_numpy(AR1[pos].squeeze()), bins=50, alpha=0.5)
                 plt.tight_layout()
                 plt.savefig(f"graphs_data/graphs_{dataset_name}/max_radius_{run}.jpg", dpi=170.7)
                 plt.close()
+
 
                 if 'voronoi' in style:
 
@@ -875,12 +877,14 @@ def data_generate_cell(config, visualize=True, run_vizualized=0, style='color', 
                                     cell = vertices_per_cell[i]
                                     vertices = to_numpy(vertices_pos[cell, :])
                                     patches.append(Polygon(vertices, closed=True))
-                            elif pos.shape[0]==1:
-                                cell = vertices_per_cell[i]
-                                vertices = to_numpy(vertices_pos[cell, :])
-                                patches.append(Polygon(vertices, closed=True))
-                            pc = PatchCollection(patches, alpha=0.4, facecolors=cmap.color(n))
-                            ax.add_collection(pc)
+                                pc = PatchCollection(patches, alpha=0.4, facecolors=cmap.color(n))
+                                ax.add_collection(pc)
+                            # elif pos.shape[0]==1:
+                            #     cell = vertices_per_cell[pos]
+                            #     vertices = to_numpy(vertices_pos[cell, :])
+                            #     patches = Polygon(vertices, closed=True)
+                            #     pc = PatchCollection(patches, alpha=0.4, facecolors=cmap.color(n))
+                            #     ax.add_collection(pc)
 
                             if 'center' in style:
                                 plt.scatter(to_numpy(X1[index_particles[n], 0]), to_numpy(X1[index_particles[n], 1]), s=1, color=cmap.color(n))
@@ -937,13 +941,6 @@ def data_generate_cell(config, visualize=True, run_vizualized=0, style='color', 
             torch.save(T1_list, f'graphs_data/graphs_{dataset_name}/T1_list_{run}.pt')
             np.savez(f'graphs_data/graphs_{dataset_name}/edge_p_p_list_{run}', *edge_p_p_list)
 
-
-            torch.save(x_list, f'graphs_data/graphs_{dataset_name}/x_list_{run+1}.pt')
-            torch.save(y_list, f'graphs_data/graphs_{dataset_name}/y_list_{run+1}.pt')
-            torch.save(T1_list, f'graphs_data/graphs_{dataset_name}/T1_list_{run+1}.pt')
-            np.savez(f'graphs_data/graphs_{dataset_name}/edge_p_p_list_{run+1}', *edge_p_p_list)
-
-
             torch.save(cycle_length, f'graphs_data/graphs_{dataset_name}/cycle_length.pt')
             torch.save(CL1, f'graphs_data/graphs_{dataset_name}/cycle_length_distrib.pt')
             torch.save(cell_death_rate, f'graphs_data/graphs_{dataset_name}/cell_death_rate.pt')
@@ -962,7 +959,6 @@ def data_generate_cell(config, visualize=True, run_vizualized=0, style='color', 
     for handler in logger.handlers[:]:
         handler.close()
         logger.removeHandler(handler)
-
 
 
 def data_generate_mesh(config, visualize=True, run_vizualized=0, style='color', erase=False, step=5, alpha=0.2, ratio=1,
@@ -1144,6 +1140,7 @@ def data_generate_mesh(config, visualize=True, run_vizualized=0, style='color', 
         if bSave:
             torch.save(x_mesh_list, f'graphs_data/graphs_{dataset_name}/x_mesh_list_{run}.pt')
             torch.save(y_mesh_list, f'graphs_data/graphs_{dataset_name}/y_mesh_list_{run}.pt')
+
 
 
 def data_generate_particle_field(config, visualize=True, run_vizualized=0, style='color', erase=False, step=5, alpha=0.2, ratio=1,

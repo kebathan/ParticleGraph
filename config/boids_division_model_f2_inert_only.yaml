@@ -1,5 +1,5 @@
 description: 'Boids 16 different types, division'
-dataset: 'boids_division_model_f2_no_boids'
+dataset: 'boids_division_model_f2_inert_only'
 
 simulation:
   params: [[42.031494,  19.948257,  89.53507  ],

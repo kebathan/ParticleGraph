@@ -1,7 +1,7 @@
 
 import umap
 from matplotlib.ticker import FormatStrFormatter
-from ParticleGraph.models import Interaction_Particle, Interaction_Cell, Interaction_Particle_Field, Signal_Propagation, Mesh_Laplacian, Mesh_RPS, Interaction_Particle_Tracking
+from ParticleGraph.models import Interaction_Particle, Interaction_Agent, Interaction_Cell, Interaction_Particle_Field, Signal_Propagation, Mesh_Laplacian, Mesh_RPS, Interaction_Particle_Tracking
 from ParticleGraph.utils import *
 
 from GNN_particles_Ntype import *
@@ -11,6 +11,7 @@ from torch_geometric.utils.convert import to_networkx
 import warnings
 import numpy as np
 import time
+
 
 def linear_model(x, a, b):
     return a * x + b
@@ -39,7 +40,7 @@ def get_type_time_series(new_labels=None, dataset_number=None, cell_id=None, n_p
 
 def get_in_features(rr, embedding_, config_model, max_radius):
     match config_model:
-        case 'PDE_A':
+        case 'PDE_A' | 'PDE_Cell_A':
             in_features = torch.cat((rr[:, None] / max_radius, 0 * rr[:, None],
                                      rr[:, None] / max_radius, embedding_), dim=1)
         case 'PDE_ParticleField_A':
@@ -483,6 +484,9 @@ def plot_training_cell(config, dataset_name, log_dir, epoch, N, model, n_particl
         else:
             embedding_ = model.a[1, n, :] * torch.ones((1000, model_config.embedding_dim), device=device)
         match model_config.particle_model_name:
+            case 'PDE_Cell_A':
+                in_features = torch.cat((rr[:, None] / max_radius, 0 * rr[:, None],
+                                         rr[:, None] / max_radius, embedding_), dim=1)
             case 'PDE_Cell_B':
                 in_features = torch.cat((rr[:, None] / max_radius, 0 * rr[:, None],
                                          torch.abs(rr[:, None]) / max_radius, 0 * rr[:, None], 0 * rr[:, None],
@@ -754,13 +758,15 @@ def choose_training_model(model_config, device):
     model=[]
     model_name = model_config.graph_model.particle_model_name
     match model_name:
-        case 'PDE_Cell_B' | 'PDE_Cell_B_area':
+        case 'PDE_Cell_A' | 'PDE_Cell_B' | 'PDE_Cell_B_area':
             model = Interaction_Cell(aggr_type=aggr_type, config=model_config, device=device, bc_dpos=bc_dpos, dimension=dimension)
             model.edges = []
         case 'PDE_ParticleField_A' | 'PDE_ParticleField_B':
             model = Interaction_Particle_Field(aggr_type=aggr_type, config=model_config, device=device, bc_dpos=bc_dpos,
                                           dimension=dimension)
             model.edges = []
+        case 'PDE_Agents' | 'PDE_Agents_A' | 'PDE_Agents_B' | 'PDE_Agents_C':
+            model = Interaction_Agent(aggr_type=aggr_type, config=model_config, device=device, bc_dpos=bc_dpos, dimension=dimension)
         case 'PDE_A' | 'PDE_A_bis' | 'PDE_B' | 'PDE_B_mass' | 'PDE_B_bis' | 'PDE_E' | 'PDE_G':
             if has_no_tracking:
                 model=Interaction_Particle_Tracking(aggr_type=aggr_type, config=model_config, device=device, bc_dpos=bc_dpos, dimension=dimension)
@@ -856,6 +862,8 @@ def get_index_particles(x, n_particle_types, dimension):
 def get_type_list(x, dimension):
     type_list = x[:, 1 + 2 * dimension:2 + 2 * dimension].clone().detach()
     return type_list
+
+
 
 
 

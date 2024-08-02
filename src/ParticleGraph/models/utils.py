@@ -48,7 +48,7 @@ def get_in_features(rr, embedding_, config_model, max_radius):
         case 'PDE_A_bis':
             in_features = torch.cat((rr[:, None] / max_radius, 0 * rr[:, None],
                                      rr[:, None] / max_radius, embedding_, embedding_), dim=1)
-        case 'PDE_B':
+        case 'PDE_B' | 'PDE_Cell_B':
             in_features = torch.cat((rr[:, None] / max_radius, 0 * rr[:, None],
                                      rr[:, None] / max_radius, 0 * rr[:, None], 0 * rr[:, None],
                                      0 * rr[:, None], 0 * rr[:, None], embedding_), dim=1)
@@ -487,7 +487,6 @@ def plot_training_cell(config, dataset_name, log_dir, epoch, N, model, n_particl
                 in_features = torch.cat((rr[:, None] / max_radius, 0 * rr[:, None],
                                          torch.abs(rr[:, None]) / max_radius, 0 * rr[:, None], 0 * rr[:, None],
                                          0 * rr[:, None], 0 * rr[:, None], embedding_), dim=1)
-
             case 'PDE_Cell_B_area':
                 in_features = torch.cat((rr[:, None] / max_radius, 0 * rr[:, None],
                                          torch.abs(rr[:, None]) / max_radius, 0 * rr[:, None], 0 * rr[:, None],
@@ -689,7 +688,7 @@ def analyze_edge_function(rr=[], vizualize=False, config=None, model_MLP=[], mod
         elif config_model == 'PDE_E':
             rr = torch.tensor(np.linspace(min_radius, max_radius, 1000)).to(device)
         elif 'PDE_N' in config_model:
-            rr = torch.tensor(np.linspace(0, 2, 1000)).to(device)
+            rr = torch.tensor(np.linspace(0, 0.9, 1000)).to(device)
         else:
             rr = torch.tensor(np.linspace(0, max_radius, 1000)).to(device)
 
@@ -708,9 +707,7 @@ def analyze_edge_function(rr=[], vizualize=False, config=None, model_MLP=[], mod
         func = func[:, 0]
         func_list.append(func)
         if ((n % 5 == 0) | (config.graph_model.particle_model_name=='PDE_GS') | ('PDE_N' in config_model)) & vizualize:
-            plt.plot(to_numpy(rr),
-                     to_numpy(func) * to_numpy(ynorm),
-                     color=cmap.color(type_list[n].astype(int)), linewidth=2, alpha=0.25)
+            plt.plot(to_numpy(rr), to_numpy(func) * to_numpy(ynorm),2, color=cmap.color(type_list[n].astype(int)), linewidth=2, alpha=0.25)
 
     func_list = torch.stack(func_list)
     func_list_ = to_numpy(func_list)
@@ -724,7 +721,7 @@ def analyze_edge_function(rr=[], vizualize=False, config=None, model_MLP=[], mod
             trans = umap.UMAP(n_neighbors=500, n_components=2, transform_queue_size=0, random_state=config.training.seed).fit(func_list_[new_index])
             proj_interaction = trans.transform(func_list_)
         else:
-            trans = umap.UMAP(n_neighbors=100, n_components=2, transform_queue_size=0).fit(func_list_)
+            trans = umap.UMAP(n_neighbors=50, n_components=2, transform_queue_size=0).fit(func_list_)
             proj_interaction = trans.transform(func_list_)
     print('done ...')
 

@@ -129,7 +129,9 @@ def init_cells(config, cycle_length, final_cell_mass, cell_death_rate, mc_slope,
     particle_id = particle_id[:, None]
     type = type[:, None]
 
-    return particle_id, pos, dpos, type, status, cell_age, cell_stage, cell_mass_distrib, growth_rate_distrib, cycle_length_distrib, cell_death_rate_distrib, mc_slope_distrib, cell_area_distrib
+    perimeter = torch.zeros((n_particles,1), device=device)
+
+    return particle_id, pos, dpos, type, status, cell_age, cell_stage, cell_mass_distrib, growth_rate_distrib, cycle_length_distrib, cell_death_rate_distrib, mc_slope_distrib, cell_area_distrib, perimeter
 
 def update_cell_cycle_stage(cell_age, cycle_length, type_list, device):
     g1 = 0.46
@@ -204,7 +206,6 @@ def get_Delaunay(points=[], device=[]):
 
     tri = Delaunay(to_numpy(points))  # Compute Delaunay triangulation
 
-
     p = points[tri.simplices]  # Triangle vertices
 
     # Triangle vertices
@@ -216,7 +217,7 @@ def get_Delaunay(points=[], device=[]):
     a = A - C
     b = B - C
 
-    cc = cross2(sq2(a) * b - sq2(b) * a, a, b) / (2 * ncross2(a, b) + 1E-6) + C
+    cc = cross2(sq2(a) * b - sq2(b) * a, a, b) / (2 * ncross2(a, b) + 1E-16) + C
 
     cc = cc.t()
 
@@ -257,11 +258,20 @@ def get_voronoi_areas(vertices_pos, vertices_per_cell, device):
     return areas
 
 def get_voronoi_perimeters(vertices_pos, vertices_per_cell, device):
-    lengths = get_voronoi_lengths(vertices_pos, vertices_per_cell, device)
+    perimeters = []
+    for v_list in vertices_per_cell:
 
-    perimeter = [torch.sum(torch.tensor(i, device=device)) for i in lengths]
+        per_cell = 0
+        for v in range(-1, len(v_list)-1):
+            v1 = vertices_pos[v_list[v]]
+            v2 = vertices_pos[v_list[v+1]]
+            per_cell += torch.dist(v1, v2)
 
-    return torch.tensor(perimeter, device=device)
+        perimeters.append(per_cell)
+
+    perimeters = torch.stack(perimeters)
+
+    return perimeters
 
 def get_voronoi_lengths(vertices_pos, vertices_per_cell, device):
 
@@ -272,7 +282,7 @@ def get_voronoi_lengths(vertices_pos, vertices_per_cell, device):
         for v in range(-1, len(v_list)-1):
             v1 = vertices_pos[v_list[v]]
             v2 = vertices_pos[v_list[v+1]]
-            per_cell.append(math.dist(v1, v2))
+            per_cell.append(torch.dist(v1, v2))
 
         lengths.append(per_cell)
 

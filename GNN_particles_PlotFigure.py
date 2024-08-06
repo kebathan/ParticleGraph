@@ -7,6 +7,7 @@ import imageio
 from matplotlib import rc
 from ParticleGraph.fitting_models import *
 from ParticleGraph.utils import set_size
+from scipy.ndimage import median_filter
 
 os.environ["PATH"] += os.pathsep + '/usr/local/texlive/2023/bin/x86_64-linux'
 
@@ -394,19 +395,20 @@ def plot_embedding_func_cluster_state(model, config, config_file, embedding_clus
     n_particles = config.simulation.n_particles
 
     model_a = model.a[1].clone().detach()
+    model_a = torch.reshape(model_a, (model.n_particles * model.n_frames, model.embedding_dim))
     embedding = to_numpy(model_a)
 
     fig, ax = fig_init()
     for n in range(n_particle_types):
-        plt.scatter(embedding[index_particles[n], 0], embedding[index_particles[n], 1], s=1,
-                    color=cmap.color(n), alpha=0.025)
+        pos = np.argwhere(type_list == n).squeeze().astype(int)
+        if pos.size > 0:
+            plt.scatter(to_numpy(model_a[pos, 0]), to_numpy(model_a[pos, 1]), s=1, color=cmap.color(n), alpha=0.01)
     plt.xlabel(r'$\ensuremath{\mathbf{a}}_{i0}$', fontsize=78)
     plt.ylabel(r'$\ensuremath{\mathbf{a}}_{i1}$', fontsize=78)
     plt.tight_layout()
     plt.savefig(f"./{log_dir}/results/first_embedding_{config_file}_{epoch}.tif", dpi=170.7)
     plt.close()
 
-    fig, ax = fig_init()
     if 'PDE_N' in config.graph_model.signal_model_name:
         model_MLP_ = model.lin_phi
     else:
@@ -416,8 +418,6 @@ def plot_embedding_func_cluster_state(model, config, config_file, embedding_clus
                                                         model_MLP=model_MLP_, model_a=model_a,
                                                         type_list=type_list, ynorm=ynorm,
                                                         cmap=cmap, device=device)
-
-    plt.close()
 
     fig, ax = fig_init()
     type_list_short = type_list[index]
@@ -434,15 +434,12 @@ def plot_embedding_func_cluster_state(model, config, config_file, embedding_clus
     plt.close()
 
     np.save(f"./{log_dir}/results/UMAP_{config_file}_{epoch}.npy", proj_interaction)
-    np.save(f"./{log_dir}/results/embedding_{config_file}_{epoch}.npy", embedding)
 
     labels, n_clusters, new_labels = sparsify_cluster_state(config.training.cluster_method, proj_interaction, embedding,
                                                       config.training.cluster_distance_threshold, index, index_next, type_list_short,
                                                       n_particle_types, embedding_cluster)
 
-    type_list_short = type_list[index]
-
-    model_a_list_short = model.a[1,index, :].clone().detach()
+    model_a_list_short = model_a[index, :].clone().detach()
     median_center_list = []
     for n in range(n_clusters):
         pos = np.argwhere(new_labels == n).squeeze().astype(int)
@@ -459,8 +456,11 @@ def plot_embedding_func_cluster_state(model, config, config_file, embedding_clus
 
     new_labels = to_numpy(min_index).astype(int)
 
+    median_center_list = median_center_list[new_labels].clone().detach()
+    median_center_list = torch.reshape(median_center_list, (n_frames, n_particles, model.embedding_dim))
+
     with torch.no_grad():
-        model.a[1] = median_center_list[new_labels].clone().detach()
+        model.a[1] = median_center_list.clone().detach()
 
     accuracy = metrics.accuracy_score(type_list, new_labels)
 
@@ -1470,14 +1470,14 @@ def plot_attraction_repulsion_state(config_file, epoch_list, log_dir, logger, de
         print(f'result accuracy: {np.round(accuracy, 2)}    n_clusters: {n_clusters}    obtained with  method: {config.training.cluster_method}   threshold: {config.training.cluster_distance_threshold}')
         logger.info(f'result accuracy: {np.round(accuracy, 2)}    n_clusters: {n_clusters}    obtained with  method: {config.training.cluster_method}   threshold: {config.training.cluster_distance_threshold}')
 
+        model_a = model.a[1].clone().detach()
+        model_a = torch.reshape(model_a, (model.n_particles * model.n_frames, model.embedding_dim))
+
         fig, ax = fig_init()
-        embedding = get_embedding(model.a, 1)
         for n in range(n_particle_types):
-            plt.scatter(embedding[index_particles[n], 0], embedding[index_particles[n], 1], color=cmap.color(n), s=400,
-                        alpha=0.01)
-        for n in range(n_particle_types):
-            m = np.median(embedding[index_particles[n]],axis=0)
-            plt.scatter(m[0], m[1], color='k', s=100, alpha=1)
+            pos = np.argwhere(new_labels == n).squeeze().astype(int)
+            if pos.size > 0:
+                plt.scatter(to_numpy(model_a[pos, 0]), to_numpy(model_a[pos, 1]), s=400, color=cmap.color(n), alpha=0.01)
         plt.xlabel(r'$\ensuremath{\mathbf{a}}_{i0}$', fontsize=78)
         plt.ylabel(r'$\ensuremath{\mathbf{a}}_{i1}$', fontsize=78)
         plt.tight_layout()
@@ -1526,7 +1526,6 @@ def plot_attraction_repulsion_state(config_file, epoch_list, log_dir, logger, de
         plt.savefig(f"./{log_dir}/results/true_kinograph_{config_file}.tif", dpi=170.7)
         plt.close()
 
-
         fig, ax = fig_init(formatx='%.0f', formaty='%.0f')
         plt.imshow(learned_time_series, aspect='auto', cmap='tab10',vmin=0, vmax=2)
         plt.xlabel('frame', fontsize=78)
@@ -1535,26 +1534,27 @@ def plot_attraction_repulsion_state(config_file, epoch_list, log_dir, logger, de
         plt.savefig(f"./{log_dir}/results/learned_kinograph_{config_file}.tif", dpi=170.7)
         plt.close()
 
-        cell_id = 800
-        GT_time_series = get_time_series(x_list=x_list[1], cell_id=cell_id, feature='type')
-        learned_time_series = get_type_time_series(new_labels=new_labels, dataset_number=1, cell_id=cell_id,
-                                                   n_particles=n_particles, n_frames=n_frames,
-                                                   has_cell_division=has_cell_division)
-        fig = plt.figure(figsize=(6, 12))
-        ax = fig.add_subplot(2, 1, 1)
-        plt.plot(GT_time_series, color='k', ls="--")
-        plt.ylim([0,2])
-        plt.ylabel('cell type', fontsize=32)
-        ax = fig.add_subplot(2, 1, 2)
-        plt.plot(learned_time_series, color='k', ls="--")
-        plt.ylim([0,2])
-        plt.ylabel('cell type', fontsize=32)
-        plt.xlabel('frame', fontsize=32)
-        plt.tight_layout()
-        plt.savefig(f"./{log_dir}/results/comparison_sequence_{config_file}.tif", dpi=170.7)
-        plt.close()
+        GT = GT_time_series[:,0:n_frames]
+        time_series = learned_time_series
 
-        print(f'accuracy {metrics.accuracy_score(GT_time_series[0:250], learned_time_series[0:250])}')
+        new_time_series = 0 * time_series
+        accuracy_list = []
+        for k in trange(n_particles):
+            input = time_series[k]
+            output = median_filter(input, size=5, mode='nearest')
+            new_time_series[k] = output
+            accuracy = metrics.accuracy_score(GT[k], output)
+            accuracy_list.append(accuracy)
+
+        accuracy = np.array(accuracy_list)
+        print(f'accuracy: {np.mean(accuracy)} +/- {np.std(accuracy)}')
+
+        fig, ax = fig_init(formatx='%.0f', formaty='%.0f')
+        plt.imshow(new_time_series, aspect='auto', cmap='tab10',vmin=0, vmax=2)
+        plt.xlabel('frame', fontsize=78)
+        plt.ylabel('cell_id', fontsize=78)
+        plt.tight_layout()
+        plt.savefig(f"./{log_dir}/results/filtered_learned_kinograph_{config_file}.tif", dpi=170.7)
 
 
 def plot_attraction_repulsion_tracking(config_file, epoch_list, log_dir, logger, device):
@@ -5024,15 +5024,15 @@ if __name__ == '__main__':
 
     matplotlib.use("Qt5Agg")
 
-    # config_list =['arbitrary_3_sequence_d','arbitrary_3_sequence_e']
+    config_list =['arbitrary_3_sequence_d']
     # # config_list = ['signal_N_100_2_d']
     # config_list = ['signal_N_100_2_a']
     # config_list = ['boids_division_model_f2']
-    config_list = ["agents_e"]
+    # config_list = ["agents_e"]
 
     for config_file in config_list:
         config = ParticleGraphConfig.from_yaml(f'./config/{config_file}.yaml')
-        data_plot(config=config, config_file=config_file, epoch_list=['1_0'], device=device)
+        data_plot(config=config, config_file=config_file, epoch_list=['15_0','20_0'], device=device)
         # plot_generated_agents(config, config_file, device)
         # plot_generated(config=config, run=0, style='white voronoi', step = 120, device=device)
         # plot_focused_on_cell(config=config, run=0, style='color', cell_id=175, step = 5, device=device)

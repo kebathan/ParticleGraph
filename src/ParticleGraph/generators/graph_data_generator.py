@@ -13,6 +13,7 @@ from matplotlib.patches import Polygon
 from matplotlib.collections import PatchCollection
 import tifffile
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+import seaborn as sns
 
 def data_generate(config, visualize=True, run_vizualized=0, style='color', erase=False, step=5, alpha=0.2, ratio=1,
                   scenario='none', device=None, bSave=True):
@@ -444,6 +445,7 @@ def data_generate_cell(config, visualize=True, run_vizualized=0, style='color', 
         edge_p_p_list = []
         vertices_pos_list = []
         vertices_per_cell_list = []
+        current_loss =[]
 
         '''
         INITIALIZE PER CELL TYPE VALUES1000
@@ -470,9 +472,18 @@ def data_generate_cell(config, visualize=True, run_vizualized=0, style='color', 
         if run == 0:
             cycle_length, final_cell_mass, cell_death_rate, mc_slope, cell_area = init_cell_range(config, device=device)
 
-        N1, X1, V1, T1, H1, A1, S1, M1, R1, CL1, DR1, MC1, AR1 = init_cells(config, cycle_length, final_cell_mass,
+        N1, X1, V1, T1, H1, A1, S1, M1, R1, CL1, DR1, MC1, AR1, P1 = init_cells(config, cycle_length, final_cell_mass,
                                                                             cell_death_rate, mc_slope, cell_area, bc_pos, bc_dpos, dimension,
                                                                             device=device)
+
+        coeff = 0
+        num_cells = []
+        for i in range(n_particle_types):
+            pos = torch.argwhere(T1.squeeze() == i).shape[0]
+            num_cells.append(pos)
+            coeff += num_cells[i] * cell_area[i]
+        target_areas_per_type = torch.tensor([cell_area[i] / coeff for i in range(n_particle_types)], device=device)
+        target_areas = target_areas_per_type[to_numpy(T1).astype(int)].squeeze().clone().detach()
 
         T1_list = T1.clone().detach()
 
@@ -493,7 +504,7 @@ def data_generate_cell(config, visualize=True, run_vizualized=0, style='color', 
 
         index_particles = []
         for n in range(n_particle_types):
-            pos = torch.argwhere(T1 == n)
+            pos = torch.argwhere(T1.squeeze() == n)
             pos = to_numpy(pos[:, 0].squeeze()).astype(int)
             index_particles.append(pos)
         n_particles_alive = len(X1)
@@ -509,7 +520,7 @@ def data_generate_cell(config, visualize=True, run_vizualized=0, style='color', 
                 sample = torch.rand(len(X1), device=device)
                 H1[sample.squeeze() < DR1.squeeze() / 5E4, 0] = 0
                 # removal if too small
-                pos = torch.argwhere(AR1.squeeze()<5E-6)# & (T1.squeeze() == 0))
+                pos = torch.argwhere((AR1.squeeze()<2E-4) & (A1.squeeze() > 25))
                 if len(pos) > 0:
                     H1[pos,0]=0
                 n_particles_alive = torch.sum(H1[:, 0])
@@ -527,8 +538,7 @@ def data_generate_cell(config, visualize=True, run_vizualized=0, style='color', 
                     N1_ = n_particles + torch.arange(n_add_nodes, device=device)
                     N1 = torch.cat((N1, N1_[:, None]), dim=0)
 
-                    man_track_ = torch.cat((N1_[:, None] + 1, torch.zeros((n_add_nodes, 3), device=device)),
-                                           1)  # cell ID
+                    man_track_ = torch.cat((N1_[:, None] + 1, torch.zeros((n_add_nodes, 3), device=device)),1)  # cell ID
                     man_track_[:, 1] = it  # start time
                     man_track_[:, 2] = -1  # end time
                     man_track_[0:n_add_nodes // 2, 3:4] = N1[pos] + 1  # parent cell
@@ -539,7 +549,7 @@ def data_generate_cell(config, visualize=True, run_vizualized=0, style='color', 
                     n_particles = n_particles + n_add_nodes
 
                     angle = torch.atan(V1[pos, 1] / (V1[pos, 0] + 1E-10))
-                    separation = [torch.cos(angle) * 0.01,torch.sin(angle) * 0.01]
+                    separation = [torch.cos(angle) * 0.005,torch.sin(angle) * 0.005]
                     separation = torch.stack(separation)
                     separation = separation.t()
 
@@ -565,10 +575,12 @@ def data_generate_cell(config, visualize=True, run_vizualized=0, style='color', 
                                      cycle_length[to_numpy(T1[pos, 0]), None] * var[:, None]), dim=0)
                     DR1 = torch.cat((DR1, cell_death_rate[to_numpy(T1[pos, 0]), None] * nd[:, None],
                                      cell_death_rate[to_numpy(T1[pos, 0]), None] * nd[:, None]), dim=0)
-                    MC1 = torch.cat((MC1, mc_slope[to_numpy(T1[pos, 0]), None], mc_slope[to_numpy(T1[pos, 0]), None]),
-                                    dim=0)
+                    MC1 = torch.cat((MC1, mc_slope[to_numpy(T1[pos, 0]), None], mc_slope[to_numpy(T1[pos, 0]), None]), dim=0)
                     AR1 = torch.cat((AR1, AR1[pos, :], AR1[pos, :]), dim=0)
+                    P1 = torch.cat((P1, P1[pos, :], P1[pos, :]), dim=0)
                     R1 = M1 / (2 * CL1)
+
+                    target_areas = torch.cat((target_areas, target_areas[pos], target_areas[pos]), dim=0)
 
                     n_particles_alive = torch.sum(H1[:, 0])
 
@@ -591,10 +603,12 @@ def data_generate_cell(config, visualize=True, run_vizualized=0, style='color', 
             DR1 = DR1[alive]
             MC1 = MC1[alive]
             AR1 = AR1[alive]
+            P1 = P1[alive]
+            target_areas = target_areas[alive]
 
             index_particles = []
             for n in range(n_particle_types):
-                pos = torch.argwhere(T1 == n)
+                pos = torch.argwhere(T1.squeeze() == n)
                 pos = to_numpy(pos[:, 0].squeeze()).astype(int)
                 index_particles.append(pos)
 
@@ -614,7 +628,7 @@ def data_generate_cell(config, visualize=True, run_vizualized=0, style='color', 
             x = torch.concatenate((N1.clone().detach(), X1.clone().detach(), V1.clone().detach(), T1.clone().detach(),
                                    H1.clone().detach(), A1.clone().detach(), S1.clone().detach(), M1.clone().detach(),
                                    R1.clone().detach(), DR1.clone().detach(), MC1.clone().detach(),
-                                   AR1.clone().detach()), 1)
+                                   AR1.clone().detach(), P1.clone().detach()), 1)
 
             # calculate connectivity
             with torch.no_grad():
@@ -633,12 +647,6 @@ def data_generate_cell(config, visualize=True, run_vizualized=0, style='color', 
                 edges_len_list.append(edge_index.shape[1])
                 x_len_list.append(x.shape[0])
 
-            # calculate passive model
-
-            # voronoi_perimeter = get_voronoi_perimeters(vertices_pos, vertices_per_cell, device)
-            # voronoi_lengths = get_voronoi_lengths(vertices_pos, vertices_per_cell, device)
-            # U = cell_energy(voronoi_area, voronoi_perimeter, voronoi_lengths, device)
-
             # model prediction
             with torch.no_grad():
                 y = model(dataset, has_field=True)
@@ -647,15 +655,6 @@ def data_generate_cell(config, visualize=True, run_vizualized=0, style='color', 
             first_X1 = X1.clone().detach()
 
             if has_inert_model:
-
-                coeff = 0
-                num_cells = []
-                for i in range(n_particle_types):
-                    pos = torch.argwhere(T1.squeeze() == i).shape[0]
-                    num_cells.append(pos)
-                    coeff += num_cells[i] * cell_area[i]
-                target_areas_per_type = torch.tensor([cell_area[i] / coeff for i in range(n_particle_types)], device=device)
-                target_areas = target_areas_per_type[to_numpy(T1).astype(int)].squeeze().clone().detach()
 
                 X1_ = X1.clone().detach()
                 X1_.requires_grad = True
@@ -670,16 +669,38 @@ def data_generate_cell(config, visualize=True, run_vizualized=0, style='color', 
                 index = result.indices
                 cc = cc[index]
                 # tri = tri[index]
+
                 voronoi_area = get_voronoi_areas(cc, vertices_per_cell, device)
-
+                perimeter = get_voronoi_perimeters(cc, vertices_per_cell, device)
                 AR1 = voronoi_area[:, None].clone().detach()
+                P1 = perimeter[:,None].clone().detach()
 
-                loss = (target_areas - voronoi_area).norm(2)
+                loss = simulation_config.coeff_area * (target_areas - voronoi_area).norm(2)
+                if simulation_config.coeff_perimeter>0:
+                    loss += simulation_config.coeff_perimeter * torch.sum(perimeter**2)
+
                 loss.backward()
                 optimizer.step()
-                print(loss.item())
 
-                X1_ = X1_.clone().detach()
+                # print(f'loss {loss.item()}')
+                # fig = plt.figure(figsize=(12, 12))
+                # ax = fig.add_subplot(1, 1, 1)
+                # vor, vertices_pos, vertices_per_cell, all_points = get_vertices(points=X1, device=device)
+                # voronoi_plot_2d(vor, ax=ax, show_vertices=False, line_colors='black', line_width=1, line_alpha=0.5,
+                #                 point_size=0)
+                # plt.scatter(to_numpy(cc[:, 0]), to_numpy(cc[:, 1]), s=1, color='r')
+                #
+                # fig = plt.figure(figsize=(12, 12))
+                # ax = fig.add_subplot(1, 1, 1)
+                # vor, vertices_pos, vertices_per_cell, all_points = get_vertices(points=X1, device=device)
+                # voronoi_plot_2d(vor, ax=ax, show_vertices=False, line_colors='black', line_width=1, line_alpha=0.5,
+                #                 point_size=0)
+                # vor, vertices_pos, vertices_per_cell, all_points = get_vertices(points=X1_, device=device)
+                # voronoi_plot_2d(vor, ax=ax, show_vertices=False, line_colors='red', line_width=1, line_alpha=0.5,
+                #                 point_size=0)
+
+                current_loss.append(loss.item())
+
                 X1 = bc_pos(X1_.clone().detach())
 
             if model_config.prediction == '2nd_derivative':
@@ -716,6 +737,8 @@ def data_generate_cell(config, visualize=True, run_vizualized=0, style='color', 
                 V1 = y + y_voronoi
 
             X1 = bc_pos(first_X1 + V1 * delta_t)
+
+
 
             # output plots
             if visualize & (run == run_vizualized) & (it % step == 0) & (it >= 0):
@@ -831,10 +854,9 @@ def data_generate_cell(config, visualize=True, run_vizualized=0, style='color', 
 
                 fig = plt.figure(figsize=(12, 12))
                 ax = fig.add_subplot(2, 2, 1)
-                plt.plot(max_radius_list)
-                plt.xlabel('Frame')
-                plt.ylabel('Max radius')
-                plt.ylim([0, simulation_config.max_radius * 1.1])
+                plt.plot(current_loss)
+                plt.xlabel('N')
+                plt.ylabel('Current_loss')
                 ax = fig.add_subplot(2, 2, 2)
                 plt.plot(x_len_list, edges_len_list)
                 plt.xlabel('Number of particles')
@@ -847,9 +869,10 @@ def data_generate_cell(config, visualize=True, run_vizualized=0, style='color', 
                 for n in range(n_particle_types):
                     pos = torch.argwhere((T1.squeeze() == n) & (H1[:, 0].squeeze() == 1))
                     if pos.shape[0] > 1:
-                        plt.hist(to_numpy(AR1[pos].squeeze()), bins=50, alpha=0.5)
+                        sns.kdeplot(to_numpy(AR1[pos].squeeze()), fill=True, color=cmap.color(n), alpha=0.5)
+                        # plt.hist(to_numpy(AR1[pos].squeeze()), bins=100, alpha=0.5)
                 plt.tight_layout()
-                plt.savefig(f"graphs_data/graphs_{dataset_name}/max_radius_{run}.jpg", dpi=170.7)
+                plt.savefig(f"graphs_data/graphs_{dataset_name}/gen_{run}.jpg", dpi=170.7)
                 plt.close()
 
 
@@ -863,7 +886,6 @@ def data_generate_cell(config, visualize=True, run_vizualized=0, style='color', 
                         ax = fig.add_subplot(1, 1, 1)
                         plt.xticks([])
                         plt.yticks([])
-                        index_particles = []
 
                         voronoi_plot_2d(vor, ax=ax, show_vertices=False, line_colors='black', line_width=1, line_alpha=0.5,
                                         point_size=0)
@@ -877,17 +899,24 @@ def data_generate_cell(config, visualize=True, run_vizualized=0, style='color', 
                                     cell = vertices_per_cell[i]
                                     vertices = to_numpy(vertices_pos[cell, :])
                                     patches.append(Polygon(vertices, closed=True))
-                                pc = PatchCollection(patches, alpha=0.4, facecolors=cmap.color(n))
+                                if (n==0) & (has_cell_death) & (n_particle_types==3):
+                                    pc = PatchCollection(patches, alpha=0.4, facecolors='k')
+                                else:
+                                    pc = PatchCollection(patches, alpha=0.4, facecolors=cmap.color(n))
                                 ax.add_collection(pc)
-                            # elif pos.shape[0]==1:
-                            #     cell = vertices_per_cell[pos]
-                            #     vertices = to_numpy(vertices_pos[cell, :])
-                            #     patches = Polygon(vertices, closed=True)
-                            #     pc = PatchCollection(patches, alpha=0.4, facecolors=cmap.color(n))
-                            #     ax.add_collection(pc)
+                            elif pos.shape[0]==1:
+                                try:
+                                    cell = vertices_per_cell[pos]
+                                    vertices = to_numpy(vertices_pos[cell, :])
+                                    patches = Polygon(vertices, closed=True)
+                                    pc = PatchCollection(patches, alpha=0.4, facecolors=cmap.color(n))
+                                    ax.add_collection(pc)
+                                except:
+                                    pass
 
-                            if 'center' in style:
-                                plt.scatter(to_numpy(X1[index_particles[n], 0]), to_numpy(X1[index_particles[n], 1]), s=1, color=cmap.color(n))
+                        if 'center' in style:
+                            plt.scatter(to_numpy(X1[:, 0]), to_numpy(X1[:, 1]), s=1, c='k')
+                            plt.scatter(to_numpy(first_X1[:, 0]), to_numpy(first_X1[:, 1]), s=1, c='r')
 
                         if 'vertices' in style:
                             plt.scatter(to_numpy(vertices_pos[:, 0]), to_numpy(vertices_pos[:, 1]), s=5, color='k')
@@ -955,6 +984,20 @@ def data_generate_cell(config, visualize=True, run_vizualized=0, style='color', 
                 man_track = np.int16(man_track)
                 np.savetxt(f'graphs_data/graphs_{dataset_name}/man_track.txt', man_track, fmt="%d", delimiter=" ",
                            newline="\n")
+
+    if bSave:
+        run = run + 1
+
+        torch.save(x_list, f'graphs_data/graphs_{dataset_name}/x_list_{run}.pt')
+        torch.save(y_list, f'graphs_data/graphs_{dataset_name}/y_list_{run}.pt')
+        torch.save(T1_list, f'graphs_data/graphs_{dataset_name}/T1_list_{run}.pt')
+        np.savez(f'graphs_data/graphs_{dataset_name}/edge_p_p_list_{run}', *edge_p_p_list)
+
+        torch.save(cycle_length, f'graphs_data/graphs_{dataset_name}/cycle_length.pt')
+        torch.save(CL1, f'graphs_data/graphs_{dataset_name}/cycle_length_distrib.pt')
+        torch.save(cell_death_rate, f'graphs_data/graphs_{dataset_name}/cell_death_rate.pt')
+        torch.save(DR1, f'graphs_data/graphs_{dataset_name}/cell_death_rate_distrib.pt')
+        torch.save(model.p, f'graphs_data/graphs_{dataset_name}/model_p.pt')
 
     for handler in logger.handlers[:]:
         handler.close()
@@ -1266,7 +1309,6 @@ def data_generate_particle_field(config, visualize=True, run_vizualized=0, style
             dataset_f_p = data.Data(x=x_particle_field, pos=x_particle_field[:, 1:3], edge_index=edge_index)
             if not (has_particle_dropout):
                 edge_f_p_list.append(edge_index)
-
 
             # model prediction
             with torch.no_grad():
